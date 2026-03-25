@@ -139,9 +139,6 @@ router.beforeEach(async (to) => {
   if (to.meta.requiresAuth && !auth.token) {
     return { name: 'login', query: { redirect: to.fullPath } };
   }
-  if (to.meta.guest && auth.token) {
-    return { name: 'dashboard' };
-  }
   if (to.meta.requiresAuth && auth.token && !auth.user) {
     await auth.fetchMe();
   }
@@ -149,11 +146,33 @@ router.beforeEach(async (to) => {
   const company = useCompanyStore();
 
   const redirectFirstAllowedModule = () => {
+    // New account: no org yet — must create a company first (avoid login ↔ dashboard loop).
+    if (!company.companies.length) return { name: 'companies' };
     if (company.canAccessModule('accounting')) return { name: 'accounts' };
     if (company.canAccessModule('clinical')) return { name: 'clinical-patients' };
     if (company.canAccessModule('staff')) return { name: 'staff-users' };
     return { name: 'login' };
   };
+
+  if (to.meta.guest && auth.token) {
+    if (!company.companies.length) await company.loadCompanies();
+    if (!company.companies.length) return { name: 'companies' };
+    return { name: 'dashboard' };
+  }
+
+  // Companies: allow first-time setup (zero companies). Otherwise same as owner-only.
+  if (to.name === 'companies') {
+    if (!company.companies.length) await company.loadCompanies();
+    if (company.companies.length === 0) return true;
+    const isOwnerAnywhere = company.companies.some((c) => c.is_owner);
+    if (!isOwnerAnywhere) {
+      if (!company.currentCompanyId && company.companies.length > 0) {
+        company.setCurrentCompany(company.companies[0].id);
+      }
+      return redirectFirstAllowedModule();
+    }
+    return true;
+  }
 
   if (to.meta.ownerOnly) {
     if (!company.companies.length) await company.loadCompanies();
