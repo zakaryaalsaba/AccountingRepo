@@ -102,6 +102,39 @@ function redactDatabaseUrl(u) {
   return String(u).replace(/(:\/\/)([^/:]+):([^@]+)(@)/, '$1$2:***$4');
 }
 
+/**
+ * pg parses `sslmode=require` (etc.) from the URL and merges it with `Pool({ ssl })`.
+ * That can still yield SELF_SIGNED_CERT_IN_CHAIN even when `ssl.ca` is set.
+ * When we supply explicit `ssl`, drop SSL-related query params from the connection string.
+ */
+function stripSslQueryParamsFromDatabaseUrl(connectionString) {
+  if (!connectionString) return connectionString;
+  const raw = String(connectionString);
+  try {
+    const u = new URL(raw.replace(/^postgres(ql)?:/i, 'http:'));
+    u.searchParams.delete('sslmode');
+    u.searchParams.delete('ssl');
+    u.searchParams.delete('uselibpqcompat');
+    const query = u.searchParams.toString();
+    const userinfo =
+      u.username != null && u.username !== ''
+        ? `${encodeURIComponent(u.username)}:${encodeURIComponent(u.password || '')}@`
+        : u.password != null && u.password !== ''
+          ? `:${encodeURIComponent(u.password)}@`
+          : '';
+    const hostport = u.port ? `${u.hostname}:${u.port}` : u.hostname;
+    const proto = /^postgresql:/i.test(raw) ? 'postgresql' : 'postgres';
+    return `${proto}://${userinfo}${hostport}${u.pathname}${query ? `?${query}` : ''}`;
+  } catch {
+    return raw
+      .replace(/([?&])sslmode=[^&]*/gi, '$1')
+      .replace(/([?&])ssl=[^&]*/gi, '$1')
+      .replace(/([?&])uselibpqcompat=[^&]*/gi, '$1')
+      .replace(/\?&/g, '?')
+      .replace(/\?$/, '');
+  }
+}
+
 /** Call before sensitive DB work (e.g. register) to trace SSL + CA in Runtime Logs. */
 export function logPoolSslDebug(context = '') {
   const prefix = `[db/ssl]${context ? ` ${context}` : ''}`;
@@ -131,10 +164,21 @@ export function logPoolSslDebug(context = '') {
 }
 
 // Log once when the API process starts (DigitalOcean Runtime Logs)
-logPoolSslDebug('(startup)');
+logPoolSslDebug('(startup - ZAK)');
+
+const poolConnectionString = sslForPool
+  ? stripSslQueryParamsFromDatabaseUrl(process.env.DATABASE_URL)
+  : process.env.DATABASE_URL;
+
+if (sslForPool && DEBUG_SSL) {
+  console.log(
+    '[db/ssl] Pool connectionString (redacted, ssl params stripped)=',
+    redactDatabaseUrl(poolConnectionString)
+  );
+}
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: poolConnectionString,
   max: 20,
   ssl: sslForPool,
 });
