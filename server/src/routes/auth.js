@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { query } from '../db.js';
+import { query, logPoolSslDebug } from '../db.js';
 import { signToken, authRequired } from '../middleware/auth.js';
 
 const router = Router();
@@ -8,6 +8,7 @@ const SALT = 12;
 
 router.post('/register', async (req, res) => {
   try {
+    logPoolSslDebug('(before register)');
     const { email, password, full_name } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
