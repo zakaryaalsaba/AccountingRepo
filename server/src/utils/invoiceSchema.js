@@ -1,0 +1,64 @@
+import { pool } from '../db.js';
+
+let cachedGlColumns = null;
+let cachedPayerColumns = null;
+
+/** Whether `invoices.sale_transaction_id` exists (invoice GL migration applied). */
+export async function invoicesHaveGlColumns() {
+  if (cachedGlColumns !== null) return cachedGlColumns;
+  try {
+    const r = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'invoices'
+         AND column_name = 'sale_transaction_id'
+       LIMIT 1`
+    );
+    cachedGlColumns = r.rows.length > 0;
+    return cachedGlColumns;
+  } catch {
+    cachedGlColumns = false;
+    return false;
+  }
+}
+
+/** Whether migration 002 invoice columns are fully present (all four). */
+export async function invoicesHavePayerColumns() {
+  if (cachedPayerColumns !== null) return cachedPayerColumns;
+  try {
+    const r = await pool.query(
+      `SELECT COUNT(*)::int AS c
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'invoices'
+         AND column_name IN ('total_amount', 'paid_amount', 'payer_type', 'payer_id')`
+    );
+    cachedPayerColumns = r.rows[0].c === 4;
+    return cachedPayerColumns;
+  } catch {
+    cachedPayerColumns = false;
+    return false;
+  }
+}
+
+export async function paymentsTableExists() {
+  const payer = await invoicesHavePayerColumns();
+  if (!payer) return false;
+  try {
+    const r = await pool.query(
+      `SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'payments'
+       LIMIT 1`
+    );
+    return r.rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function resetInvoiceSchemaCache() {
+  cachedGlColumns = null;
+  cachedPayerColumns = null;
+}
