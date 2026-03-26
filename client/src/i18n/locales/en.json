@@ -102,9 +102,12 @@
     "code": "Code",
     "name": "Name",
     "type": "Type",
+    "level": "Level",
+    "rootAccount": "Root account",
     "add": "Add account",
     "save": "Save",
     "delete": "Delete",
+    "empty": "No accounts yet.",
     "types": {
       "ASSET": "Assets",
       "LIABILITY": "Liabilities",

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query, pool } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { DEFAULT_ACCOUNTS } from '../utils/defaultAccounts.js';
+import { createAccountAuto } from '../utils/accountHierarchy.js';
 
 const router = Router();
 
@@ -48,11 +49,12 @@ router.post('/', async (req, res) => {
     );
     const company = ins.rows[0];
     for (const a of DEFAULT_ACCOUNTS) {
-      await client.query(
-        `INSERT INTO accounts (company_id, code, name, type)
-         VALUES ($1, $2, $3, $4::account_type)`,
-        [company.id, a.code, a.name, a.type]
-      );
+      await createAccountAuto(client, {
+        companyId: company.id,
+        name: a.name,
+        type: a.type,
+        parentId: null,
+      });
     }
     await client.query('COMMIT');
     // Match GET / shape so the client store has is_owner + user_role for nav/RBAC.

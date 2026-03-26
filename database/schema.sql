@@ -74,13 +74,17 @@ CREATE TYPE account_type AS ENUM (
 CREATE TABLE accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  -- Legacy code kept for backwards compatibility with existing reports/services.
   code VARCHAR(50) NOT NULL,
+  account_code VARCHAR(50) NOT NULL,
+  level INTEGER NOT NULL CHECK (level BETWEEN 1 AND 5),
   name VARCHAR(255) NOT NULL,
   type account_type NOT NULL,
   parent_id UUID REFERENCES accounts (id) ON DELETE SET NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (company_id, code)
+  UNIQUE (company_id, code),
+  UNIQUE (company_id, account_code)
 );
 
 CREATE INDEX idx_accounts_company ON accounts (company_id);
