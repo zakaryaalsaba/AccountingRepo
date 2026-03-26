@@ -57,6 +57,12 @@
     "validationJson": "Invalid JSON object",
     "confirmDeactivate": "Deactivate this user for this company?"
   },
+  "notFound": {
+    "title": "Page not found",
+    "body": "This address doesn’t exist or the page was moved. You can sign in again from the login page.",
+    "goLogin": "Go to sign in",
+    "redirecting": "Redirecting to sign in in {n}s…"
+  },
   "auth": {
     "login": "Sign in",
     "register": "Create account",

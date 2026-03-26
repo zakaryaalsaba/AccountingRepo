@@ -131,6 +131,12 @@ const router = createRouter({
         },
       ],
     },
+    // Must be last: unknown paths (manual URL, typos, old links)
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: () => import('@/views/NotFoundView.vue'),
+    },
   ],
 });
 
@@ -142,6 +148,11 @@ router.beforeEach(async (to) => {
   if (to.meta.requiresAuth && auth.token && !auth.user) {
     await auth.fetchMe();
   }
+
+  if (to.name === 'not-found') {
+    return true;
+  }
+
   const { useCompanyStore } = await import('@/stores/company');
   const company = useCompanyStore();
 
