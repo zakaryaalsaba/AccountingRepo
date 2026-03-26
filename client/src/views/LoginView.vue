@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue';
-import { useRouter, useRoute, RouterLink } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
 
@@ -73,16 +73,6 @@ async function submit() {
             {{ auth.loading ? t('common.loading') : t('auth.submitLogin') }}
           </button>
         </form>
-
-        <p class="mt-8 text-center text-sm text-slate-400">
-          {{ t('auth.noAccount') }}
-          <RouterLink
-            to="/register"
-            class="font-semibold text-brand-300 transition hover:text-brand-200"
-          >
-            {{ t('auth.register') }}
-          </RouterLink>
-        </p>
       </div>
       <p class="mt-6 text-center text-xs text-slate-500">© {{ new Date().getFullYear() }} · {{ t('app.title') }}</p>
     </div>
