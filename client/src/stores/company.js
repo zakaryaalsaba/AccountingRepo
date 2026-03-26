@@ -49,9 +49,11 @@ export const useCompanyStore = defineStore('company', () => {
 
   async function createCompany(name, industry) {
     const { data } = await api.post('/api/companies', { name, industry });
-    companies.value.push(data.company);
-    setCurrentCompany(data.company.id);
-    return data.company;
+    const created = data.company;
+    // Prefer full list so rows always match GET / (is_owner, user_role, etc.).
+    await loadCompanies();
+    if (created?.id) setCurrentCompany(created.id);
+    return companies.value.find((c) => c.id === created?.id) || created;
   }
 
   return {

@@ -55,7 +55,13 @@ router.post('/', async (req, res) => {
       );
     }
     await client.query('COMMIT');
-    return res.status(201).json({ company });
+    // Match GET / shape so the client store has is_owner + user_role for nav/RBAC.
+    const row = {
+      ...company,
+      is_owner: true,
+      user_role: 'owner',
+    };
+    return res.status(201).json({ company: row });
   } catch (e) {
     await client.query('ROLLBACK');
     console.error(e);
