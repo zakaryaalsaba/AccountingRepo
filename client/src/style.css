@@ -99,7 +99,8 @@
   }
 
   .ui-table-wrap {
-    @apply ui-card overflow-hidden;
+    @apply ui-card overflow-x-auto overflow-y-hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   .ui-table {
