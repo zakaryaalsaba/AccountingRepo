@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, computed, ref } from 'vue';
+import { onMounted, onBeforeUnmount, computed, ref, watch } from 'vue';
 import { useRouter, useRoute, RouterLink, RouterView } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
@@ -13,6 +13,7 @@ const auth = useAuthStore();
 const company = useCompanyStore();
 
 const mobileNavOpen = ref(false);
+let desktopMq = null;
 const isOwnerAnywhere = computed(() => company.companies.some((c) => c.is_owner));
 
 const navGroups = computed(() => [
@@ -89,15 +90,39 @@ function toggleLocale() {
   locale.value = locale.value === 'ar' ? 'en' : 'ar';
 }
 
+function closeMobileNav() {
+  mobileNavOpen.value = false;
+}
+
 onMounted(async () => {
   await company.loadCompanies();
   if (auth.token && !auth.user) await auth.fetchMe();
+
+  if (typeof window !== 'undefined') {
+    desktopMq = window.matchMedia('(min-width: 768px)');
+    const handleDesktopChange = (e) => {
+      if (e.matches) closeMobileNav();
+    };
+    desktopMq.addEventListener('change', handleDesktopChange);
+    if (desktopMq.matches) closeMobileNav();
+
+    onBeforeUnmount(() => {
+      desktopMq?.removeEventListener('change', handleDesktopChange);
+    });
+  }
 });
+
+watch(
+  () => route.fullPath,
+  () => {
+    closeMobileNav();
+  }
+);
 
 async function logout() {
   auth.clear();
   company.setCurrentCompany(null);
-  mobileNavOpen.value = false;
+  closeMobileNav();
   await router.push({ name: 'login' });
 }
 </script>
@@ -110,7 +135,7 @@ async function logout() {
       type="button"
       class="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm md:hidden"
       aria-label="Close menu"
-      @click="mobileNavOpen = false"
+      @click="closeMobileNav"
     />
 
     <!-- Off-canvas transforms MUST be max-md only: [dir=rtl] .rtl:translate-x-full beats .md:translate-x-0, hiding the sidebar on desktop in Arabic. -->
@@ -157,7 +182,7 @@ async function logout() {
                 ? 'bg-white/10 text-white shadow-inner-light ring-1 ring-white/10'
                 : 'text-slate-400 hover:bg-white/5 hover:text-white'
             "
-            @click="mobileNavOpen = false"
+            @click="closeMobileNav"
           >
             <span
               class="flex h-9 w-9 items-center justify-center rounded-lg transition-colors"
