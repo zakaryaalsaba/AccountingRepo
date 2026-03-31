@@ -380,4 +380,116 @@ router.get('/statements/reconciliation-report', async (req, res) => {
   }
 });
 
+router.get('/statements/reconciliation-drilldown', async (req, res) => {
+  try {
+    const { bank_account_id, from, to, status = 'all', limit = '200', offset = '0' } = req.query;
+    if (!bank_account_id || !from || !to) {
+      return res.status(400).json({
+        error: 'bank_account_id, from, and to query params are required',
+      });
+    }
+    const acc = await query(
+      `SELECT id FROM bank_accounts WHERE id = $1 AND company_id = $2`,
+      [bank_account_id, req.company.id]
+    );
+    if (!acc.rows.length) return res.status(400).json({ error: 'Invalid bank_account_id' });
+
+    const lim = Math.min(1000, Math.max(1, parseInt(limit, 10) || 200));
+    const off = Math.max(0, parseInt(offset, 10) || 0);
+    const params = [req.company.id, bank_account_id, from, to];
+    let where = `bsl.company_id = $1
+                 AND bsl.bank_account_id = $2
+                 AND bsl.statement_date >= $3::date
+                 AND bsl.statement_date <= $4::date`;
+    if (status === 'reconciled') where += ` AND bsl.is_reconciled = TRUE`;
+    else if (status === 'unreconciled') where += ` AND bsl.is_reconciled = FALSE`;
+
+    const r = await query(
+      `SELECT bsl.*,
+              t.id AS transaction_id,
+              t.entry_date AS transaction_date,
+              t.description AS transaction_description,
+              t.reference AS transaction_reference
+       FROM bank_statement_lines bsl
+       LEFT JOIN transactions t
+         ON t.id = bsl.reconciled_transaction_id
+         AND t.company_id = bsl.company_id
+       WHERE ${where}
+       ORDER BY bsl.statement_date DESC, bsl.created_at DESC
+       LIMIT ${lim} OFFSET ${off}`,
+      params
+    );
+
+    return res.json({ lines: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load reconciliation drilldown' });
+  }
+});
+
+router.get('/statements/reconciliation-exceptions', async (req, res) => {
+  try {
+    const { bank_account_id, from, to, amount_tolerance = '0.01' } = req.query;
+    if (!bank_account_id || !from || !to) {
+      return res.status(400).json({
+        error: 'bank_account_id, from, and to query params are required',
+      });
+    }
+    const acc = await query(
+      `SELECT id FROM bank_accounts WHERE id = $1 AND company_id = $2`,
+      [bank_account_id, req.company.id]
+    );
+    if (!acc.rows.length) return res.status(400).json({ error: 'Invalid bank_account_id' });
+
+    const tol = Math.max(0, Number(amount_tolerance) || 0.01);
+    const r = await query(
+      `SELECT bsl.id,
+              bsl.statement_date,
+              bsl.description,
+              bsl.reference,
+              bsl.amount,
+              bsl.is_reconciled,
+              bsl.reconciled_transaction_id,
+              t.entry_date AS transaction_date,
+              t.description AS transaction_description,
+              tx.t_debit,
+              tx.t_credit,
+              tx.net_amount,
+              CASE
+                WHEN bsl.is_reconciled = FALSE THEN 'unreconciled'
+                WHEN bsl.reconciled_transaction_id IS NULL THEN 'missing_transaction_link'
+                WHEN ABS(COALESCE(tx.net_amount, 0) - bsl.amount) > $5::numeric THEN 'amount_mismatch'
+                ELSE 'ok'
+              END AS exception_type
+       FROM bank_statement_lines bsl
+       LEFT JOIN transactions t
+         ON t.id = bsl.reconciled_transaction_id
+         AND t.company_id = bsl.company_id
+       LEFT JOIN (
+         SELECT tl.transaction_id,
+                SUM(tl.debit)::numeric(18,2) AS t_debit,
+                SUM(tl.credit)::numeric(18,2) AS t_credit,
+                (SUM(tl.debit) - SUM(tl.credit))::numeric(18,2) AS net_amount
+         FROM transaction_lines tl
+         GROUP BY tl.transaction_id
+       ) tx ON tx.transaction_id = bsl.reconciled_transaction_id
+       WHERE bsl.company_id = $1
+         AND bsl.bank_account_id = $2
+         AND bsl.statement_date >= $3::date
+         AND bsl.statement_date <= $4::date
+         AND (
+           bsl.is_reconciled = FALSE
+           OR bsl.reconciled_transaction_id IS NULL
+           OR ABS(COALESCE(tx.net_amount, 0) - bsl.amount) > $5::numeric
+         )
+       ORDER BY bsl.statement_date DESC, bsl.created_at DESC`,
+      [req.company.id, bank_account_id, from, to, tol]
+    );
+    return res.json({ exceptions: r.rows, amount_tolerance: tol });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load reconciliation exceptions' });
+  }
+});
+
 export default router;

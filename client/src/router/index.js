@@ -72,6 +72,30 @@ const router = createRouter({
           meta: { requiresCompany: true, module: 'accounting' },
         },
         {
+          path: 'audit-trail',
+          name: 'audit-trail',
+          component: () => import('@/views/AuditTrailView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'analysis',
+          name: 'analysis',
+          component: () => import('@/views/AccountAnalysisView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'vouchers',
+          name: 'vouchers',
+          component: () => import('@/views/VouchersView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'accounts-tree',
+          name: 'accounts-tree',
+          component: () => import('@/views/AccountTreeVisualView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
           path: 'staff/users',
           name: 'staff-users',
           component: () => import('@/views/staff/StaffUsersView.vue'),

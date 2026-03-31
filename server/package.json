@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "seed:demo": "node scripts/seedDemoData.mjs",
+    "test:integration": "node --test tests/postingWorkflows.test.mjs",
+    "test:smoke": "node tests/smoke.e2e.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

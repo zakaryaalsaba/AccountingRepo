@@ -20,7 +20,7 @@ Use this checklist to track implementation progress. Mark each item complete by 
 - [x] Partial payments and overpayments
 - [x] Credit notes and refunds
 - [x] AR aging report (30/60/90+)
-- [ ] Overdue reminders and dunning flow
+- [x] Overdue reminders and dunning flow
 
 ## 4) Accounts Payable (AP)
 - [x] Vendor master data

@@ -6,6 +6,7 @@ import { invoicesHavePayerColumns } from '../utils/invoiceSchema.js';
 import { apTablesExist } from '../utils/apSchema.js';
 import { budgetTablesExist } from '../utils/budgetSchema.js';
 import { dimensionsTablesExist } from '../utils/dimensionsSchema.js';
+import { toCsv, toSimplePdf } from '../utils/reportExport.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -794,6 +795,35 @@ router.get('/dimensions-summary', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to build dimensions summary' });
+  }
+});
+
+router.post('/export', async (req, res) => {
+  try {
+    const { format = 'csv', filename = 'report', title = 'Report', columns = [], rows = [] } = req.body || {};
+    if (!Array.isArray(columns) || !columns.length) {
+      return res.status(400).json({ error: 'columns[] is required and must not be empty' });
+    }
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ error: 'rows[] must be an array' });
+    }
+    const safeName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (String(format).toLowerCase() === 'csv') {
+      const csv = toCsv(columns, rows);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}.csv"`);
+      return res.status(200).send(csv);
+    }
+    if (String(format).toLowerCase() === 'pdf') {
+      const pdf = toSimplePdf(title, columns, rows);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}.pdf"`);
+      return res.status(200).send(pdf);
+    }
+    return res.status(400).json({ error: 'format must be csv or pdf' });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to export report' });
   }
 });
 

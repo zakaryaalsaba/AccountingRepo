@@ -33,6 +33,10 @@ const navGroups = computed(() => [
       { to: '/payments', label: t('nav.payments'), icon: 'wallet', needsCompany: true },
       { to: '/expenses', label: t('nav.expenses'), icon: 'cash', needsCompany: true },
       { to: '/reports', label: t('nav.reports'), icon: 'chart', needsCompany: true },
+      { to: '/analysis', label: t('nav.analysis'), icon: 'chart', needsCompany: true },
+      { to: '/vouchers', label: t('nav.vouchers'), icon: 'doc', needsCompany: true },
+      { to: '/accounts-tree', label: t('nav.accountTree'), icon: 'layers', needsCompany: true },
+      { to: '/audit-trail', label: t('nav.auditTrail'), icon: 'clipboard', needsCompany: true },
     ],
   },
   {
