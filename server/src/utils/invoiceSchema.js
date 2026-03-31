@@ -3,6 +3,7 @@ import { pool } from '../db.js';
 let cachedGlColumns = null;
 let cachedPayerColumns = null;
 let cachedNumberingColumns = null;
+let cachedCreditNotesTable = null;
 
 /** Whether `invoices.sale_transaction_id` exists (invoice GL migration applied). */
 export async function invoicesHaveGlColumns() {
@@ -59,6 +60,23 @@ export async function paymentsTableExists() {
   }
 }
 
+export async function invoiceCreditNotesTableExists() {
+  if (cachedCreditNotesTable !== null) return cachedCreditNotesTable;
+  try {
+    const r = await pool.query(
+      `SELECT 1
+       FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'invoice_credit_notes'
+       LIMIT 1`
+    );
+    cachedCreditNotesTable = r.rows.length > 0;
+    return cachedCreditNotesTable;
+  } catch {
+    cachedCreditNotesTable = false;
+    return false;
+  }
+}
+
 /** Whether invoice numbering/template columns are present. */
 export async function invoicesHaveNumberingColumns() {
   if (cachedNumberingColumns !== null) return cachedNumberingColumns;
@@ -82,4 +100,5 @@ export function resetInvoiceSchemaCache() {
   cachedGlColumns = null;
   cachedPayerColumns = null;
   cachedNumberingColumns = null;
+  cachedCreditNotesTable = null;
 }

@@ -18,6 +18,7 @@ const pl = ref(null);
 const bs = ref(null);
 const cf = ref(null);
 const trial = ref(null);
+const apAging = ref(null);
 const accounts = ref([]);
 const ledgerAccountId = ref('');
 const ledger = ref(null);
@@ -107,6 +108,23 @@ async function runTrial() {
   }
 }
 
+async function runApAging() {
+  if (!company.currentCompanyId) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const { data } = await api.get('/api/reports/ap-aging', {
+      params: { as_of: asOf.value },
+    });
+    apAging.value = data;
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    apAging.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
 async function runLedger() {
   if (!company.currentCompanyId || !ledgerAccountId.value) return;
   loading.value = true;
@@ -153,6 +171,7 @@ watch(() => company.currentCompanyId, () => {
   bs.value = null;
   cf.value = null;
   trial.value = null;
+  apAging.value = null;
   ledger.value = null;
   plCompare.value = null;
   bsCompare.value = null;
@@ -310,6 +329,53 @@ onMounted(loadAccounts);
             >
               <span>{{ row.entry_date }} — {{ row.description || '—' }} ({{ t(`reports.${row.section}`) }})</span>
               <span class="shrink-0 tabular-nums">{{ Number(row.cash_change).toFixed(2) }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="ui-card ui-card-pad relative overflow-hidden">
+        <h2 class="ui-card-title mb-5">{{ t('reports.apAging') }}</h2>
+        <div class="mb-6 flex flex-wrap items-end gap-3">
+          <div>
+            <label class="ui-label">{{ t('reports.asOf') }}</label>
+            <input v-model="asOf" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <button type="button" class="ui-btn-primary" :disabled="loading" @click="runApAging">
+            {{ t('reports.run') }}
+          </button>
+        </div>
+        <div v-if="apAging" class="space-y-4 text-sm">
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">0-30</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets.current).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">31-60</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['31_60']).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">61-90</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['61_90']).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">90+</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['90_plus']).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 p-4 text-white shadow-lg shadow-brand-900/20">
+              <p class="text-xs font-bold uppercase tracking-wide text-brand-100">{{ t('reports.totalPayables') }}</p>
+              <p class="mt-1 text-xl font-extrabold tabular-nums">{{ Number(apAging.buckets.total).toFixed(2) }}</p>
+            </div>
+          </div>
+          <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
+            <li
+              v-for="row in apAging.lines"
+              :key="row.bill_id"
+              class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
+            >
+              <span>{{ row.vendor_name }} — {{ row.bill_number || row.bill_id }}</span>
+              <span class="shrink-0 tabular-nums">{{ Number(row.outstanding).toFixed(2) }}</span>
             </li>
           </ul>
         </div>

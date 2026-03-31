@@ -9,6 +9,7 @@ import {
   postInvoiceSale,
 } from '../utils/invoicePosting.js';
 import {
+  invoiceCreditNotesTableExists,
   invoicesHaveGlColumns,
   invoicesHaveNumberingColumns,
   invoicesHavePayerColumns,
@@ -599,6 +600,12 @@ router.patch('/:id', async (req, res) => {
 
 router.get('/:id/credit-notes', async (req, res) => {
   try {
+    if (!(await invoiceCreditNotesTableExists())) {
+      return res.status(503).json({
+        error: 'Credit notes schema not installed.',
+        hint: 'Run: psql $DATABASE_URL -f database/migrations/008_invoice_credit_notes.sql',
+      });
+    }
     const inv = await pool.query(`SELECT id FROM invoices WHERE id = $1 AND company_id = $2`, [
       req.params.id,
       req.company.id,
@@ -619,6 +626,12 @@ router.get('/:id/credit-notes', async (req, res) => {
 });
 
 router.post('/:id/credit-notes', async (req, res) => {
+  if (!(await invoiceCreditNotesTableExists())) {
+    return res.status(503).json({
+      error: 'Credit notes schema not installed.',
+      hint: 'Run: psql $DATABASE_URL -f database/migrations/008_invoice_credit_notes.sql',
+    });
+  }
   const { amount, credit_date, reason, is_refund = false } = req.body || {};
   const amt = round2(Number(amount));
   if (!credit_date || !amt || amt <= 0) {

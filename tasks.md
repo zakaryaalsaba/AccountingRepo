@@ -23,11 +23,11 @@ Use this checklist to track implementation progress. Mark each item complete by 
 - [ ] Overdue reminders and dunning flow
 
 ## 4) Accounts Payable (AP)
-- [ ] Vendor master data
-- [ ] Vendor bills with due dates and terms
-- [ ] Bill payments and partial settlement
+- [x] Vendor master data
+- [x] Vendor bills with due dates and terms
+- [x] Bill payments and partial settlement
 - [ ] Vendor credits
-- [ ] AP aging report
+- [x] AP aging report
 
 ## 5) Expense-to-GL Automation
 - [ ] Auto-post expense transactions to GL

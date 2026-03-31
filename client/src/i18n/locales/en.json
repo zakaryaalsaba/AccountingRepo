@@ -202,6 +202,8 @@
     "investing": "Investing cash flow",
     "financing": "Financing cash flow",
     "netCashFlow": "Net cash flow",
+    "apAging": "AP aging",
+    "totalPayables": "Total payables",
     "compare": "Compare periods",
     "periodA": "Period A",
     "periodB": "Period B",

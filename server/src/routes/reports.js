@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { invoicesHavePayerColumns } from '../utils/invoiceSchema.js';
+import { apTablesExist } from '../utils/apSchema.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -602,6 +603,62 @@ router.get('/cash-flow', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to build cash flow statement' });
+  }
+});
+
+router.get('/ap-aging', async (req, res) => {
+  try {
+    if (!(await apTablesExist())) {
+      return res.status(503).json({
+        error: 'AP schema not installed.',
+        hint: 'Run: psql $DATABASE_URL -f database/migrations/009_ap_vendors_bills.sql',
+      });
+    }
+    const { as_of } = req.query;
+    if (!as_of) return res.status(400).json({ error: 'Query param as_of (YYYY-MM-DD) required' });
+    const r = await query(
+      `SELECT b.id AS bill_id,
+              b.bill_number,
+              b.bill_date,
+              b.due_date,
+              v.name AS vendor_name,
+              GREATEST(b.total_amount - b.paid_amount, 0)::numeric(18,2) AS outstanding,
+              GREATEST(($2::date - b.due_date), 0) AS days_past_due
+       FROM bills b
+       JOIN vendors v ON v.id = b.vendor_id
+       WHERE b.company_id = $1
+         AND b.status <> 'draft'::bill_status
+         AND (b.total_amount - b.paid_amount) > 0
+         AND b.bill_date <= $2::date
+       ORDER BY b.due_date ASC, b.bill_date ASC`,
+      [req.company.id, as_of]
+    );
+    const buckets = { current: 0, '31_60': 0, '61_90': 0, '90_plus': 0, total: 0 };
+    const lines = r.rows.map((row) => {
+      const outstanding = rnd(row.outstanding);
+      const d = Number(row.days_past_due || 0);
+      let bucket = 'current';
+      if (d > 90) bucket = '90_plus';
+      else if (d > 60) bucket = '61_90';
+      else if (d > 30) bucket = '31_60';
+      buckets[bucket] += outstanding;
+      buckets.total += outstanding;
+      return { ...row, outstanding, days_past_due: d, bucket };
+    });
+    return res.json({
+      as_of,
+      buckets: {
+        current: rnd(buckets.current),
+        '31_60': rnd(buckets['31_60']),
+        '61_90': rnd(buckets['61_90']),
+        '90_plus': rnd(buckets['90_plus']),
+        total: rnd(buckets.total),
+      },
+      lines,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to build AP aging report' });
   }
 });
 

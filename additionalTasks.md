@@ -12,8 +12,8 @@ This file tracks important follow-up work that is not fully completed yet and sh
 - [ ] Export reports to CSV/PDF
 
 ## AR / AP Maturity
-- [ ] AP aging report
-- [ ] Vendor bills + bill payments lifecycle polish
+- [x] AP aging report
+- [x] Vendor bills + bill payments lifecycle polish
 - [ ] Customer statements and reminder workflow
 
 ## Controls & Audit
