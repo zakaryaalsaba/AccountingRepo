@@ -3,9 +3,13 @@ import { pool } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { assertDateOpen } from '../utils/periodLocks.js';
+import { dimensionsTablesExist } from '../utils/dimensionsSchema.js';
+import { writeAuditEvent } from '../utils/auditLog.js';
+import { attachAuthorization, requirePermission } from '../middleware/authorization.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
+router.use(attachAuthorization);
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
@@ -98,6 +102,7 @@ router.post('/transfer', async (req, res) => {
 router.get('/', async (req, res) => {
   const client = await pool.connect();
   try {
+    const hasDims = await dimensionsTablesExist();
     const { from, to, limit = '50', offset = '0' } = req.query;
     let sql = `
       SELECT t.id, t.company_id, t.entry_date, t.description, t.reference, t.created_at
@@ -135,6 +140,30 @@ router.get('/', async (req, res) => {
       if (!byTx[l.transaction_id]) byTx[l.transaction_id] = [];
       byTx[l.transaction_id].push(l);
     }
+    if (hasDims && lines.rows.length) {
+      const lineIds = lines.rows.map((l) => l.id);
+      const d = await client.query(
+        `SELECT tld.transaction_line_id, di.id, di.type::text AS type, di.code, di.name
+         FROM transaction_line_dimensions tld
+         JOIN dimensions di ON di.id = tld.dimension_id
+         WHERE tld.company_id = $1
+           AND tld.transaction_line_id = ANY($2::uuid[])`,
+        [req.company.id, lineIds]
+      );
+      const byLine = {};
+      for (const row of d.rows) {
+        if (!byLine[row.transaction_line_id]) byLine[row.transaction_line_id] = [];
+        byLine[row.transaction_line_id].push({
+          id: row.id,
+          type: row.type,
+          code: row.code,
+          name: row.name,
+        });
+      }
+      for (const txId of Object.keys(byTx)) {
+        byTx[txId] = byTx[txId].map((ln) => ({ ...ln, dimensions: byLine[ln.id] || [] }));
+      }
+    }
     const transactions = list.rows.map((t) => ({
       ...t,
       lines: byTx[t.id] || [],
@@ -151,6 +180,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const client = await pool.connect();
   try {
+    const hasDims = await dimensionsTablesExist();
     const t = await client.query(
       `SELECT * FROM transactions WHERE id = $1 AND company_id = $2`,
       [req.params.id, req.company.id]
@@ -164,7 +194,30 @@ router.get('/:id', async (req, res) => {
        ORDER BY tl.id`,
       [req.params.id, req.company.id]
     );
-    return res.json({ transaction: { ...t.rows[0], lines: lines.rows } });
+    let outLines = lines.rows;
+    if (hasDims && outLines.length) {
+      const lineIds = outLines.map((l) => l.id);
+      const d = await client.query(
+        `SELECT tld.transaction_line_id, di.id, di.type::text AS type, di.code, di.name
+         FROM transaction_line_dimensions tld
+         JOIN dimensions di ON di.id = tld.dimension_id
+         WHERE tld.company_id = $1
+           AND tld.transaction_line_id = ANY($2::uuid[])`,
+        [req.company.id, lineIds]
+      );
+      const byLine = {};
+      for (const row of d.rows) {
+        if (!byLine[row.transaction_line_id]) byLine[row.transaction_line_id] = [];
+        byLine[row.transaction_line_id].push({
+          id: row.id,
+          type: row.type,
+          code: row.code,
+          name: row.name,
+        });
+      }
+      outLines = outLines.map((ln) => ({ ...ln, dimensions: byLine[ln.id] || [] }));
+    }
+    return res.json({ transaction: { ...t.rows[0], lines: outLines } });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load transaction' });
@@ -174,6 +227,7 @@ router.get('/:id', async (req, res) => {
 });
 
 router.post('/', async (req, res) => {
+  return requirePermission('transactions.create')(req, res, async () => {
   const { entry_date, description, reference, lines } = req.body || {};
   if (!entry_date || !Array.isArray(lines) || lines.length < 2) {
     return res.status(400).json({
@@ -205,6 +259,7 @@ router.post('/', async (req, res) => {
       [req.company.id, entry_date, description || null, reference || null]
     );
     const tx = ins.rows[0];
+    const hasDims = await dimensionsTablesExist();
     for (const ln of lines) {
       const d = round2(ln.debit || 0);
       const c = round2(ln.credit || 0);
@@ -216,11 +271,34 @@ router.post('/', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `Invalid account for posting (must be active level 5): ${ln.account_id}` });
       }
-      await client.query(
+      const lineIns = await client.query(
         `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit)
-         VALUES ($1, $2, $3, $4)`,
+         VALUES ($1, $2, $3, $4)
+         RETURNING id`,
         [tx.id, ln.account_id, d, c]
       );
+      if (hasDims && Array.isArray(ln.dimension_ids) && ln.dimension_ids.length) {
+        const dimIds = [...new Set(ln.dimension_ids.map((x) => String(x)))];
+        const dims = await client.query(
+          `SELECT id
+           FROM dimensions
+           WHERE company_id = $1
+             AND is_active = TRUE
+             AND id = ANY($2::uuid[])`,
+          [req.company.id, dimIds]
+        );
+        if (dims.rows.length !== dimIds.length) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'One or more dimension_ids are invalid/inactive' });
+        }
+        for (const dim of dims.rows) {
+          await client.query(
+            `INSERT INTO transaction_line_dimensions (company_id, transaction_line_id, dimension_id)
+             VALUES ($1,$2,$3)`,
+            [req.company.id, lineIns.rows[0].id, dim.id]
+          );
+        }
+      }
     }
     await client.query('COMMIT');
     const linesOut = await client.query(
@@ -230,7 +308,38 @@ router.post('/', async (req, res) => {
        WHERE tl.transaction_id = $1`,
       [tx.id]
     );
-    return res.status(201).json({ transaction: { ...tx, lines: linesOut.rows } });
+    let outRows = linesOut.rows;
+    if (hasDims && outRows.length) {
+      const lineIds = outRows.map((l) => l.id);
+      const d = await client.query(
+        `SELECT tld.transaction_line_id, di.id, di.type::text AS type, di.code, di.name
+         FROM transaction_line_dimensions tld
+         JOIN dimensions di ON di.id = tld.dimension_id
+         WHERE tld.company_id = $1
+           AND tld.transaction_line_id = ANY($2::uuid[])`,
+        [req.company.id, lineIds]
+      );
+      const byLine = {};
+      for (const row of d.rows) {
+        if (!byLine[row.transaction_line_id]) byLine[row.transaction_line_id] = [];
+        byLine[row.transaction_line_id].push({
+          id: row.id,
+          type: row.type,
+          code: row.code,
+          name: row.name,
+        });
+      }
+      outRows = outRows.map((l) => ({ ...l, dimensions: byLine[l.id] || [] }));
+    }
+    await writeAuditEvent({
+      companyId: req.company.id,
+      actorUserId: req.user.id,
+      eventType: 'transaction.created',
+      entityType: 'transaction',
+      entityId: tx.id,
+      details: { line_count: outRows.length, entry_date },
+    });
+    return res.status(201).json({ transaction: { ...tx, lines: outRows } });
   } catch (e) {
     await client.query('ROLLBACK');
     if (e.status === 400) return res.status(400).json({ error: e.message });
@@ -239,10 +348,26 @@ router.post('/', async (req, res) => {
   } finally {
     client.release();
   }
+  });
 });
 
 router.delete('/:id', async (req, res) => {
+  return requirePermission('transactions.delete')(req, res, async () => {
   try {
+    const { reason } = req.body || {};
+    if (!reason || !String(reason).trim()) {
+      return res.status(400).json({ error: 'reason is required for delete' });
+    }
+    const approved = await pool.query(
+      `SELECT status
+       FROM journal_approvals
+       WHERE company_id = $1 AND transaction_id = $2
+       LIMIT 1`,
+      [req.company.id, req.params.id]
+    );
+    if (approved.rows[0]?.status === 'approved') {
+      return res.status(400).json({ error: 'Posted/approved journal cannot be deleted' });
+    }
     const cur = await pool.query(
       'SELECT entry_date FROM transactions WHERE id = $1 AND company_id = $2',
       [req.params.id, req.company.id]
@@ -254,12 +379,23 @@ router.delete('/:id', async (req, res) => {
       'DELETE FROM transactions WHERE id = $1 AND company_id = $2 RETURNING id',
       [req.params.id, req.company.id]
     );
+    if (r.rows.length) {
+      await writeAuditEvent({
+        companyId: req.company.id,
+        actorUserId: req.user.id,
+        eventType: 'transaction.deleted',
+        entityType: 'transaction',
+        entityId: req.params.id,
+        details: {},
+      });
+    }
     return res.json({ ok: true });
   } catch (e) {
     if (e.status === 400) return res.status(400).json({ error: e.message });
     console.error(e);
     return res.status(500).json({ error: 'Failed to delete transaction' });
   }
+  });
 });
 
 export default router;

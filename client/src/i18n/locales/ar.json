@@ -186,10 +186,19 @@
   "expenses": {
     "title": "المصروفات",
     "account": "حساب المصروف",
+    "vendor": "المورد",
+    "paymentMethod": "طريقة الدفع",
+    "receiptRef": "مرجع الإيصال",
     "amount": "المبلغ",
     "description": "الوصف",
     "date": "التاريخ",
-    "add": "تسجيل مصروف"
+    "add": "تسجيل مصروف",
+    "methods": {
+      "cash": "نقدي",
+      "card": "بطاقة",
+      "bank_transfer": "تحويل بنكي",
+      "payable": "ذمم دائنة"
+    }
   },
   "reports": {
     "title": "التقارير",

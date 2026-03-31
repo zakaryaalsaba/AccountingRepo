@@ -186,10 +186,19 @@
   "expenses": {
     "title": "Expenses",
     "account": "Expense account",
+    "vendor": "Vendor / supplier",
+    "paymentMethod": "Payment method",
+    "receiptRef": "Receipt reference",
     "amount": "Amount",
     "description": "Description",
     "date": "Date",
-    "add": "Record expense"
+    "add": "Record expense",
+    "methods": {
+      "cash": "Cash",
+      "card": "Card",
+      "bank_transfer": "Bank transfer",
+      "payable": "Accounts payable"
+    }
   },
   "reports": {
     "title": "Reports",

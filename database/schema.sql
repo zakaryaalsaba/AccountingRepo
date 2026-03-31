@@ -142,6 +142,33 @@ CREATE TABLE transaction_lines (
 CREATE INDEX idx_transaction_lines_tx ON transaction_lines (transaction_id);
 CREATE INDEX idx_transaction_lines_account ON transaction_lines (account_id);
 
+CREATE TYPE dimension_type AS ENUM ('cost_center', 'project', 'department', 'custom');
+
+CREATE TABLE dimensions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  type dimension_type NOT NULL,
+  code VARCHAR(60),
+  name VARCHAR(255) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, type, code)
+);
+
+CREATE INDEX idx_dimensions_company_type ON dimensions (company_id, type, is_active);
+
+CREATE TABLE transaction_line_dimensions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  transaction_line_id UUID NOT NULL REFERENCES transaction_lines (id) ON DELETE CASCADE,
+  dimension_id UUID NOT NULL REFERENCES dimensions (id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (transaction_line_id, dimension_id)
+);
+
+CREATE INDEX idx_tld_company_dimension ON transaction_line_dimensions (company_id, dimension_id);
+
 -- ---------------------------------------------------------------------------
 -- Invoices
 -- ---------------------------------------------------------------------------
@@ -167,6 +194,10 @@ CREATE TABLE invoices (
   invoice_number VARCHAR(80),
   invoice_template_id UUID REFERENCES invoice_templates (id) ON DELETE SET NULL,
   amount NUMERIC(18, 2) NOT NULL CHECK (amount >= 0),
+  subtotal_amount NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  tax_amount NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE,
+  tax_rate_id UUID,
   total_amount NUMERIC(18, 2) NOT NULL CHECK (total_amount >= 0),
   paid_amount NUMERIC(18, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
   payer_type invoice_payer_type NOT NULL DEFAULT 'customer',
@@ -262,6 +293,7 @@ CREATE TABLE vendors (
   phone VARCHAR(50),
   tax_id VARCHAR(100),
   payment_terms_days INTEGER NOT NULL DEFAULT 0 CHECK (payment_terms_days >= 0),
+  currency_code VARCHAR(10),
   notes TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -272,6 +304,10 @@ CREATE INDEX idx_vendors_company ON vendors (company_id);
 CREATE UNIQUE INDEX uq_vendors_company_name ON vendors (company_id, lower(name));
 
 CREATE TYPE bill_status AS ENUM ('draft', 'unpaid', 'partially_paid', 'paid');
+CREATE TYPE expense_payment_method AS ENUM ('cash', 'card', 'bank_transfer', 'payable');
+CREATE TYPE inventory_valuation_method AS ENUM ('average', 'fifo');
+CREATE TYPE inventory_tracking_method AS ENUM ('periodic', 'perpetual');
+CREATE TYPE inventory_movement_type AS ENUM ('purchase', 'sale', 'adjust_in', 'adjust_out');
 
 CREATE TABLE bills (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -282,6 +318,10 @@ CREATE TABLE bills (
   bill_date DATE NOT NULL,
   due_date DATE NOT NULL,
   expense_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  subtotal_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE,
+  tax_rate_id UUID,
   total_amount NUMERIC(18,2) NOT NULL CHECK (total_amount >= 0),
   paid_amount NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
   status bill_status NOT NULL DEFAULT 'unpaid',
@@ -311,6 +351,22 @@ CREATE TABLE bill_payments (
 CREATE INDEX idx_bill_payments_company ON bill_payments (company_id);
 CREATE INDEX idx_bill_payments_bill ON bill_payments (bill_id);
 
+CREATE TABLE bill_credits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  bill_id UUID NOT NULL REFERENCES bills (id) ON DELETE CASCADE,
+  credit_date DATE NOT NULL,
+  amount NUMERIC(18,2) NOT NULL CHECK (amount > 0),
+  reason TEXT,
+  is_refund BOOLEAN NOT NULL DEFAULT FALSE,
+  credit_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  refund_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bill_credits_company_bill ON bill_credits (company_id, bill_id);
+
 -- ---------------------------------------------------------------------------
 -- Expenses (linked to expense-type account)
 -- ---------------------------------------------------------------------------
@@ -319,13 +375,453 @@ CREATE TABLE expenses (
   company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
   account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
   amount NUMERIC(18, 2) NOT NULL CHECK (amount > 0),
+  vendor_name VARCHAR(255),
+  payment_method expense_payment_method NOT NULL DEFAULT 'cash',
+  receipt_reference VARCHAR(255),
+  receipt_attachment_url TEXT,
+  ocr_raw_text TEXT,
   description TEXT,
   expense_date DATE NOT NULL,
+  posting_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_expenses_company ON expenses (company_id);
 CREATE INDEX idx_expenses_account ON expenses (account_id);
+CREATE INDEX idx_expenses_posting_tx ON expenses (posting_transaction_id);
+
+-- ---------------------------------------------------------------------------
+-- Fixed assets
+-- ---------------------------------------------------------------------------
+CREATE TABLE fixed_assets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  asset_code VARCHAR(80),
+  name VARCHAR(255) NOT NULL,
+  acquisition_date DATE NOT NULL,
+  acquisition_cost NUMERIC(18,2) NOT NULL CHECK (acquisition_cost > 0),
+  useful_life_months INTEGER NOT NULL CHECK (useful_life_months > 0),
+  residual_value NUMERIC(18,2) NOT NULL DEFAULT 0 CHECK (residual_value >= 0),
+  depreciation_method VARCHAR(20) NOT NULL DEFAULT 'straight_line',
+  asset_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  accumulated_depr_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  depreciation_expense_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  disposal_date DATE,
+  disposal_proceeds NUMERIC(18,2),
+  is_disposed BOOLEAN NOT NULL DEFAULT FALSE,
+  acquisition_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  disposal_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, asset_code)
+);
+
+CREATE INDEX idx_fixed_assets_company ON fixed_assets (company_id);
+CREATE INDEX idx_fixed_assets_disposed ON fixed_assets (company_id, is_disposed);
+
+CREATE TABLE fixed_asset_depreciation_entries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  asset_id UUID NOT NULL REFERENCES fixed_assets (id) ON DELETE CASCADE,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  amount NUMERIC(18,2) NOT NULL CHECK (amount > 0),
+  transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (asset_id, period_start, period_end)
+);
+
+CREATE INDEX idx_fa_depr_company_period ON fixed_asset_depreciation_entries (company_id, period_start, period_end);
+
+-- ---------------------------------------------------------------------------
+-- Inventory accounting
+-- ---------------------------------------------------------------------------
+CREATE TABLE inventory_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  sku VARCHAR(80),
+  name VARCHAR(255) NOT NULL,
+  unit VARCHAR(40) NOT NULL DEFAULT 'unit',
+  inventory_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  cogs_account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  revenue_account_id UUID REFERENCES accounts (id) ON DELETE RESTRICT,
+  valuation_method inventory_valuation_method NOT NULL DEFAULT 'average',
+  tracking_method inventory_tracking_method NOT NULL DEFAULT 'perpetual',
+  on_hand_qty NUMERIC(18,4) NOT NULL DEFAULT 0,
+  avg_cost NUMERIC(18,6) NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, sku)
+);
+
+CREATE INDEX idx_inventory_items_company ON inventory_items (company_id);
+
+CREATE TABLE inventory_movements (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  item_id UUID NOT NULL REFERENCES inventory_items (id) ON DELETE CASCADE,
+  movement_type inventory_movement_type NOT NULL,
+  movement_date DATE NOT NULL,
+  quantity NUMERIC(18,4) NOT NULL CHECK (quantity > 0),
+  unit_cost NUMERIC(18,6),
+  reference VARCHAR(120),
+  note TEXT,
+  transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_inventory_movements_company_date ON inventory_movements (company_id, movement_date);
+CREATE INDEX idx_inventory_movements_item ON inventory_movements (item_id);
+
+CREATE TABLE inventory_fifo_layers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  item_id UUID NOT NULL REFERENCES inventory_items (id) ON DELETE CASCADE,
+  source_movement_id UUID NOT NULL REFERENCES inventory_movements (id) ON DELETE CASCADE,
+  layer_date DATE NOT NULL,
+  remaining_qty NUMERIC(18,4) NOT NULL CHECK (remaining_qty >= 0),
+  unit_cost NUMERIC(18,6) NOT NULL CHECK (unit_cost >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_inventory_fifo_layers_item_date ON inventory_fifo_layers (item_id, layer_date, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Tax engine
+-- ---------------------------------------------------------------------------
+CREATE TABLE tax_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  rate_percent NUMERIC(7,4) NOT NULL CHECK (rate_percent >= 0),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name)
+);
+
+CREATE INDEX idx_tax_rates_company ON tax_rates (company_id);
+
+CREATE TABLE tax_groups (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name)
+);
+
+CREATE TABLE tax_group_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  tax_group_id UUID NOT NULL REFERENCES tax_groups (id) ON DELETE CASCADE,
+  tax_rate_id UUID NOT NULL REFERENCES tax_rates (id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tax_group_id, tax_rate_id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Multi-currency
+-- ---------------------------------------------------------------------------
+CREATE TABLE company_currencies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  currency_code VARCHAR(10) NOT NULL,
+  is_base BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, currency_code)
+);
+
+CREATE INDEX idx_company_currencies_company ON company_currencies (company_id);
+CREATE UNIQUE INDEX uq_company_base_currency ON company_currencies (company_id) WHERE is_base = TRUE;
+
+CREATE TABLE exchange_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  rate_date DATE NOT NULL,
+  from_currency VARCHAR(10) NOT NULL,
+  to_currency VARCHAR(10) NOT NULL,
+  rate NUMERIC(18,8) NOT NULL CHECK (rate > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, rate_date, from_currency, to_currency)
+);
+
+CREATE INDEX idx_exchange_rates_company_pair_date
+  ON exchange_rates (company_id, from_currency, to_currency, rate_date DESC);
+
+-- ---------------------------------------------------------------------------
+-- Budgets & variance
+-- ---------------------------------------------------------------------------
+CREATE TABLE budgets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  fiscal_year INTEGER NOT NULL CHECK (fiscal_year >= 2000),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name, fiscal_year)
+);
+
+CREATE INDEX idx_budgets_company_year ON budgets (company_id, fiscal_year);
+
+CREATE TABLE budget_lines (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  budget_id UUID NOT NULL REFERENCES budgets (id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES accounts (id) ON DELETE RESTRICT,
+  month SMALLINT NOT NULL CHECK (month BETWEEN 1 AND 12),
+  amount NUMERIC(18,2) NOT NULL CHECK (amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (budget_id, account_id, month)
+);
+
+CREATE INDEX idx_budget_lines_company_budget ON budget_lines (company_id, budget_id, month);
+
+-- ---------------------------------------------------------------------------
+-- Recurring & scheduled accounting
+-- ---------------------------------------------------------------------------
+CREATE TYPE recurring_template_type AS ENUM ('invoice', 'bill', 'journal', 'accrual', 'prepayment');
+CREATE TYPE recurrence_frequency AS ENUM ('daily', 'weekly', 'monthly', 'quarterly', 'yearly');
+
+CREATE TABLE recurring_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  type recurring_template_type NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  frequency recurrence_frequency NOT NULL DEFAULT 'monthly',
+  interval_count INTEGER NOT NULL DEFAULT 1 CHECK (interval_count > 0),
+  start_date DATE NOT NULL,
+  end_date DATE,
+  next_run_date DATE NOT NULL,
+  auto_post BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_reverse BOOLEAN NOT NULL DEFAULT FALSE,
+  reverse_after_days INTEGER NOT NULL DEFAULT 1 CHECK (reverse_after_days >= 0),
+  payload JSONB NOT NULL DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  last_run_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_recurring_templates_company_next_run
+  ON recurring_templates (company_id, is_active, next_run_date);
+
+CREATE TABLE recurring_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  template_id UUID NOT NULL REFERENCES recurring_templates (id) ON DELETE CASCADE,
+  run_date DATE NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'posted',
+  result_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  result_record_id UUID,
+  reverse_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_recurring_runs_company_template ON recurring_runs (company_id, template_id, run_date DESC);
+
+CREATE TABLE journal_auto_reversals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  source_transaction_id UUID NOT NULL REFERENCES transactions (id) ON DELETE CASCADE,
+  reverse_on_date DATE NOT NULL,
+  reversed_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_transaction_id)
+);
+
+CREATE INDEX idx_journal_auto_reversals_company_date
+  ON journal_auto_reversals (company_id, reverse_on_date, reversed_transaction_id);
+
+-- ---------------------------------------------------------------------------
+-- Document management & auditability
+-- ---------------------------------------------------------------------------
+CREATE TYPE approval_status AS ENUM ('pending', 'approved', 'rejected');
+
+CREATE TABLE document_attachments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  entity_type VARCHAR(50) NOT NULL,
+  entity_id UUID NOT NULL,
+  file_name VARCHAR(255) NOT NULL,
+  file_url TEXT NOT NULL,
+  mime_type VARCHAR(120),
+  file_size_bytes BIGINT,
+  uploaded_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_document_attachments_company_entity
+  ON document_attachments (company_id, entity_type, entity_id);
+
+CREATE TABLE audit_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES users (id) ON DELETE SET NULL,
+  event_type VARCHAR(120) NOT NULL,
+  entity_type VARCHAR(50) NOT NULL,
+  entity_id UUID,
+  details JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_events_company_created ON audit_events (company_id, created_at DESC);
+
+CREATE TABLE journal_approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  transaction_id UUID NOT NULL REFERENCES transactions (id) ON DELETE CASCADE,
+  requested_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  approved_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  status approval_status NOT NULL DEFAULT 'pending',
+  note TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at TIMESTAMPTZ,
+  UNIQUE (transaction_id)
+);
+
+CREATE INDEX idx_journal_approvals_company_status
+  ON journal_approvals (company_id, status, requested_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Integrations
+-- ---------------------------------------------------------------------------
+CREATE TABLE integration_connections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  provider VARCHAR(60) NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  settings JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  last_synced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_integration_connections_company_provider
+  ON integration_connections (company_id, provider, status);
+
+CREATE TABLE payment_gateway_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  connection_id UUID REFERENCES integration_connections (id) ON DELETE SET NULL,
+  event_type VARCHAR(120) NOT NULL,
+  external_id VARCHAR(120),
+  payload JSONB NOT NULL DEFAULT '{}',
+  processed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_payment_gateway_events_company
+  ON payment_gateway_events (company_id, processed, created_at DESC);
+
+CREATE TABLE ecommerce_sales_syncs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  connection_id UUID REFERENCES integration_connections (id) ON DELETE SET NULL,
+  external_order_id VARCHAR(120) NOT NULL,
+  order_date DATE NOT NULL,
+  customer_name VARCHAR(255),
+  amount NUMERIC(18,2) NOT NULL CHECK (amount >= 0),
+  currency_code VARCHAR(10),
+  payload JSONB NOT NULL DEFAULT '{}',
+  imported_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, external_order_id)
+);
+
+CREATE INDEX idx_ecommerce_sales_syncs_company_date
+  ON ecommerce_sales_syncs (company_id, order_date DESC);
+
+-- ---------------------------------------------------------------------------
+-- Enterprise readiness
+-- ---------------------------------------------------------------------------
+CREATE TYPE job_status AS ENUM ('queued', 'running', 'done', 'failed');
+
+CREATE TABLE background_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES companies (id) ON DELETE CASCADE,
+  queue_name VARCHAR(80) NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}',
+  status job_status NOT NULL DEFAULT 'queued',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  locked_at TIMESTAMPTZ,
+  locked_by VARCHAR(120),
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_background_jobs_queue_status_run_after
+  ON background_jobs (queue_name, status, run_after, created_at);
+
+CREATE TABLE webhook_subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  target_url TEXT NOT NULL,
+  secret VARCHAR(255),
+  event_filter TEXT[] NOT NULL DEFAULT '{}',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_webhook_subscriptions_company_active ON webhook_subscriptions (company_id, is_active);
+
+CREATE TABLE webhook_deliveries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  subscription_id UUID NOT NULL REFERENCES webhook_subscriptions (id) ON DELETE CASCADE,
+  event_type VARCHAR(120) NOT NULL,
+  event_payload JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'queued',
+  response_status INTEGER,
+  response_body TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  delivered_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_webhook_deliveries_company_status ON webhook_deliveries (company_id, status, created_at DESC);
+
+CREATE TABLE backup_records (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES companies (id) ON DELETE SET NULL,
+  storage_uri TEXT NOT NULL,
+  checksum_sha256 VARCHAR(128),
+  snapshot_metadata JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'created',
+  created_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_backup_records_company_created ON backup_records (company_id, created_at DESC);
+
+CREATE TABLE restore_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES companies (id) ON DELETE SET NULL,
+  backup_id UUID NOT NULL REFERENCES backup_records (id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'requested',
+  requested_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  approved_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_restore_requests_company_status ON restore_requests (company_id, status, created_at DESC);
+
+CREATE INDEX idx_transactions_company_created ON transactions (company_id, created_at DESC);
+CREATE INDEX idx_invoices_company_status_date ON invoices (company_id, status, invoice_date DESC);
+CREATE INDEX idx_bills_company_status_date ON bills (company_id, status, bill_date DESC);
 
 -- ---------------------------------------------------------------------------
 -- Bank accounts & statement imports (foundation for reconciliation)
@@ -387,6 +883,7 @@ CREATE TABLE customers (
   phone VARCHAR(50),
   tax_id VARCHAR(100),
   payment_terms_days INTEGER NOT NULL DEFAULT 0,
+  currency_code VARCHAR(10),
   credit_limit NUMERIC(18,2) NOT NULL DEFAULT 0,
   notes TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,

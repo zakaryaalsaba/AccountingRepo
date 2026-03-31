@@ -6,6 +6,8 @@
 export const INVOICE_GL_CODES = {
   CASH: '1000',
   AR: '1100',
+  INPUT_TAX: '1200',
+  OUTPUT_TAX: '2100',
   REVENUE: '4000',
 };
 
@@ -46,16 +48,25 @@ function round2(n) {
  * Dr Accounts Receivable / Cr Revenue (recognize sale).
  * @param {import('pg').PoolClient} client
  */
-export async function postInvoiceSale(client, { companyId, invoiceId, amount, entryDate, customerName }) {
+export async function postInvoiceSale(client, {
+  companyId,
+  invoiceId,
+  amount,
+  entryDate,
+  customerName,
+  taxAmount = 0,
+}) {
   const amt = round2(amount);
   if (amt <= 0) return null;
+  const tax = round2(taxAmount);
+  const revenueNet = round2(amt - tax);
 
-  const ids = await requireAccountIds(client, companyId, [
-    INVOICE_GL_CODES.AR,
-    INVOICE_GL_CODES.REVENUE,
-  ]);
+  const codes = [INVOICE_GL_CODES.AR, INVOICE_GL_CODES.REVENUE];
+  if (tax > 0) codes.push(INVOICE_GL_CODES.OUTPUT_TAX);
+  const ids = await requireAccountIds(client, companyId, codes);
   const arId = ids[INVOICE_GL_CODES.AR];
   const revId = ids[INVOICE_GL_CODES.REVENUE];
+  const taxPayableId = ids[INVOICE_GL_CODES.OUTPUT_TAX];
 
   const ref = `INV-${String(invoiceId).replace(/-/g, '').slice(0, 10)}`;
   const desc = `Invoice — ${String(customerName).slice(0, 200)}`;
@@ -73,8 +84,14 @@ export async function postInvoiceSale(client, { companyId, invoiceId, amount, en
   );
   await client.query(
     `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-    [tid, revId, amt]
+    [tid, revId, revenueNet]
   );
+  if (tax > 0) {
+    await client.query(
+      `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+      [tid, taxPayableId, tax]
+    );
+  }
 
   await client.query(
     `UPDATE invoices SET sale_transaction_id = $1 WHERE id = $2 AND company_id = $3`,

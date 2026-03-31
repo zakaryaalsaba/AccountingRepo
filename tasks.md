@@ -26,42 +26,42 @@ Use this checklist to track implementation progress. Mark each item complete by 
 - [x] Vendor master data
 - [x] Vendor bills with due dates and terms
 - [x] Bill payments and partial settlement
-- [ ] Vendor credits
+- [x] Vendor credits
 - [x] AP aging report
 
 ## 5) Expense-to-GL Automation
-- [ ] Auto-post expense transactions to GL
-- [ ] Payment method handling (cash/bank/card/payable)
-- [ ] Receipt attachments and OCR-ready fields
+- [x] Auto-post expense transactions to GL
+- [x] Payment method handling (cash/bank/card/payable)
+- [x] Receipt attachments and OCR-ready fields
 
 ## 6) Fixed Assets
-- [ ] Asset register
-- [ ] Depreciation schedules
-- [ ] Monthly depreciation auto-journals
-- [ ] Asset disposal with gain/loss entries
+- [x] Asset register
+- [x] Depreciation schedules
+- [x] Monthly depreciation auto-journals
+- [x] Asset disposal with gain/loss entries
 
 ## 7) Inventory Accounting (if needed)
-- [ ] Item master and stock movement tracking
-- [ ] COGS posting (periodic/perpetual)
-- [ ] Costing method (average/FIFO)
-- [ ] Inventory valuation reports
+- [x] Item master and stock movement tracking
+- [x] COGS posting (periodic/perpetual)
+- [x] Costing method (average/FIFO)
+- [x] Inventory valuation reports
 
 ## 8) Tax Engine
-- [ ] Tax rates and tax groups (VAT/GST)
-- [ ] Tax-inclusive/exclusive calculations
-- [ ] Tax posting for invoices and bills
-- [ ] Tax return and reconciliation reports
+- [x] Tax rates and tax groups (VAT/GST)
+- [x] Tax-inclusive/exclusive calculations
+- [x] Tax posting for invoices and bills
+- [x] Tax return and reconciliation reports
 
 ## 9) Multi-Currency
-- [ ] Currency setup per company/customer/vendor/bank
-- [ ] Exchange rates table and management
-- [ ] Realized and unrealized FX gain/loss
-- [ ] Period-end revaluation journals
+- [x] Currency setup per company/customer/vendor/bank
+- [x] Exchange rates table and management
+- [x] Realized and unrealized FX gain/loss
+- [x] Period-end revaluation journals
 
 ## 10) Budgets & Variance
-- [ ] Budget by account and month
-- [ ] Actual vs budget dashboard views
-- [ ] Variance alerts and thresholds
+- [x] Budget by account and month
+- [x] Actual vs budget dashboard views
+- [x] Variance alerts and thresholds
 
 ## 11) Advanced Financial Reports
 - [x] Trial balance
@@ -71,42 +71,42 @@ Use this checklist to track implementation progress. Mark each item complete by 
 - [ ] Dimension-based reporting (project/department/etc.)
 
 ## 12) Dimensions (Cost Centers / Projects)
-- [ ] Dimension/tag model on transactions
-- [ ] Filters and summaries by dimension
-- [ ] Profitability by project/segment
+- [x] Dimension/tag model on transactions
+- [x] Filters and summaries by dimension
+- [x] Profitability by project/segment
 
 ## 13) Recurring & Scheduled Accounting
-- [ ] Recurring invoices, bills, and journals
-- [ ] Accrual and prepayment automation
-- [ ] Auto-reversing entries
+- [x] Recurring invoices, bills, and journals
+- [x] Accrual and prepayment automation
+- [x] Auto-reversing entries
 
 ## 14) Document Management & Auditability
-- [ ] Attachments for accounting documents
-- [ ] Immutable audit trail (who/what/when)
-- [ ] Journal approval workflow
-- [ ] Document and numbering integrity checks
+- [x] Attachments for accounting documents
+- [x] Immutable audit trail (who/what/when)
+- [x] Journal approval workflow
+- [x] Document and numbering integrity checks
 
 ## 15) Permissions & Workflow Controls
-- [ ] RBAC roles (owner/admin/accountant/viewer)
-- [ ] Maker-checker approval for sensitive actions
-- [ ] Per-module action permissions
-- [ ] Draft vs posted lifecycle enforcement
+- [x] RBAC roles (owner/admin/accountant/viewer)
+- [x] Maker-checker approval for sensitive actions
+- [x] Per-module action permissions
+- [x] Draft vs posted lifecycle enforcement
 
 ## 16) Data Integrity Guardrails
-- [ ] Block destructive actions on posted records (or require reversals)
-- [ ] Mandatory reason for void/cancel/reverse
-- [ ] Duplicate detection logic
-- [ ] Consistency health checks
+- [x] Block destructive actions on posted records (or require reversals)
+- [x] Mandatory reason for void/cancel/reverse
+- [x] Duplicate detection logic
+- [x] Consistency health checks
 
 ## 17) Integrations
-- [ ] Payment gateway integration
-- [ ] Payroll summary posting
-- [ ] E-commerce sales sync
-- [ ] Banking API integration
+- [x] Payment gateway integration
+- [x] Payroll summary posting
+- [x] E-commerce sales sync
+- [x] Banking API integration
 
 ## 18) Enterprise Readiness
-- [ ] Performance indexing and report optimization
-- [ ] Background job queue for heavy tasks
-- [ ] Backup and restore procedures
-- [ ] Webhooks / event-driven extensibility
+- [x] Performance indexing and report optimization
+- [x] Background job queue for heavy tasks
+- [x] Backup and restore procedures
+- [x] Webhooks / event-driven extensibility
 

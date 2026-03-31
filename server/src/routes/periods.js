@@ -3,9 +3,11 @@ import { query, pool } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { periodLocksTableExists } from '../utils/periodLocks.js';
+import { attachAuthorization, requirePermission, requireRole } from '../middleware/authorization.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
+router.use(attachAuthorization);
 
 function migrationHint() {
   return 'Run: psql $DATABASE_URL -f database/migrations/003_period_locks.sql';
@@ -13,18 +15,6 @@ function migrationHint() {
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
-}
-
-async function isOwnerOrAdmin(companyId, userId) {
-  const c = await query(`SELECT owner_id FROM companies WHERE id = $1`, [companyId]);
-  if (c.rows[0]?.owner_id === userId) return true;
-  const m = await query(
-    `SELECT role
-     FROM company_members
-     WHERE company_id = $1 AND user_id = $2 AND is_active = TRUE`,
-    [companyId, userId]
-  );
-  return m.rows[0]?.role === 'admin';
 }
 
 router.get('/', async (req, res) => {
@@ -51,6 +41,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/close', async (req, res) => {
+  return requirePermission('periods.close')(req, res, async () => {
   try {
     if (!(await periodLocksTableExists())) {
       return res.status(503).json({
@@ -88,9 +79,11 @@ router.post('/close', async (req, res) => {
     console.error(e);
     return res.status(500).json({ error: 'Failed to close period' });
   }
+  });
 });
 
 router.post('/reopen', async (req, res) => {
+  return requireRole(['owner', 'admin'])(req, res, async () => {
   try {
     if (!(await periodLocksTableExists())) {
       return res.status(503).json({
@@ -101,10 +94,6 @@ router.post('/reopen', async (req, res) => {
     const { period_start, period_end, note } = req.body || {};
     if (!period_start || !period_end) {
       return res.status(400).json({ error: 'period_start and period_end are required' });
-    }
-    const can = await isOwnerOrAdmin(req.company.id, req.user.id);
-    if (!can) {
-      return res.status(403).json({ error: 'Only company owner/admin can reopen closed periods' });
     }
     const up = await query(
       `UPDATE accounting_period_locks
@@ -125,6 +114,7 @@ router.post('/reopen', async (req, res) => {
     console.error(e);
     return res.status(500).json({ error: 'Failed to reopen period' });
   }
+  });
 });
 
 /**
@@ -135,6 +125,7 @@ router.post('/reopen', async (req, res) => {
  * - Close the full year period range
  */
 router.post('/year-close', async (req, res) => {
+  return requireRole(['owner', 'admin'])(req, res, async () => {
   try {
     if (!(await periodLocksTableExists())) {
       return res.status(503).json({
@@ -142,11 +133,6 @@ router.post('/year-close', async (req, res) => {
         hint: migrationHint(),
       });
     }
-    const can = await isOwnerOrAdmin(req.company.id, req.user.id);
-    if (!can) {
-      return res.status(403).json({ error: 'Only company owner/admin can run year-end close' });
-    }
-
     const { year, retained_earnings_account_id, note } = req.body || {};
     const y = Number(year);
     if (!Number.isInteger(y) || y < 2000 || y > 3000) {
@@ -306,6 +292,7 @@ router.post('/year-close', async (req, res) => {
     console.error(e);
     return res.status(500).json({ error: 'Failed to run year-end close' });
   }
+  });
 });
 
 export default router;

@@ -3,6 +3,7 @@ import { query, pool } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { DEFAULT_ACCOUNTS } from '../utils/defaultAccounts.js';
 import { createAccountAuto } from '../utils/accountHierarchy.js';
+import { resolveUserRole } from '../middleware/authorization.js';
 
 const router = Router();
 
@@ -95,6 +96,30 @@ router.get('/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load company' });
+  }
+});
+
+router.get('/:id/access', async (req, res) => {
+  try {
+    const company = await query(
+      `SELECT id
+       FROM companies c
+       LEFT JOIN company_members m
+         ON m.company_id = c.id AND m.user_id = $2 AND m.is_active = TRUE
+       WHERE c.id = $1 AND (c.owner_id = $2 OR m.user_id IS NOT NULL)
+       LIMIT 1`,
+      [req.params.id, req.user.id]
+    );
+    if (!company.rows.length) return res.status(404).json({ error: 'Not found' });
+    const auth = await resolveUserRole(req.params.id, req.user.id);
+    return res.json({
+      company_id: req.params.id,
+      role: auth.role,
+      permissions: auth.permissions,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load access profile' });
   }
 });
 

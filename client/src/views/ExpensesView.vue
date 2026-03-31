@@ -15,6 +15,9 @@ const error = ref('');
 const form = ref({
   account_id: '',
   amount: '',
+  vendor_name: '',
+  payment_method: 'cash',
+  receipt_reference: '',
   description: '',
   expense_date: new Date().toISOString().slice(0, 10),
 });
@@ -45,12 +48,18 @@ async function add() {
     await api.post('/api/expenses', {
       account_id: form.value.account_id,
       amount: Number(form.value.amount),
+      vendor_name: form.value.vendor_name || null,
+      payment_method: form.value.payment_method,
+      receipt_reference: form.value.receipt_reference || null,
       description: form.value.description || null,
       expense_date: form.value.expense_date,
     });
     form.value = {
       account_id: '',
       amount: '',
+      vendor_name: '',
+      payment_method: 'cash',
+      receipt_reference: '',
       description: '',
       expense_date: new Date().toISOString().slice(0, 10),
     };
@@ -96,6 +105,23 @@ watch(() => company.currentCompanyId, load);
           <input v-model="form.amount" type="number" step="0.01" min="0" required class="ui-input" />
         </div>
         <div class="sm:col-span-2">
+          <label class="ui-label">{{ t('expenses.vendor') }}</label>
+          <input v-model="form.vendor_name" type="text" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('expenses.paymentMethod') }}</label>
+          <select v-model="form.payment_method" class="ui-select">
+            <option value="cash">{{ t('payments.methods.cash') }}</option>
+            <option value="card">{{ t('payments.methods.card') }}</option>
+            <option value="bank_transfer">{{ t('payments.methods.bank_transfer') }}</option>
+            <option value="payable">{{ t('expenses.methods.payable') }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="ui-label">{{ t('expenses.receiptRef') }}</label>
+          <input v-model="form.receipt_reference" type="text" class="ui-input" />
+        </div>
+        <div class="sm:col-span-2">
           <label class="ui-label">{{ t('expenses.description') }}</label>
           <input v-model="form.description" type="text" class="ui-input" />
         </div>
@@ -118,6 +144,7 @@ watch(() => company.currentCompanyId, load);
           <tr>
             <th>{{ t('expenses.date') }}</th>
             <th>{{ t('expenses.account') }}</th>
+            <th>{{ t('expenses.paymentMethod') }}</th>
             <th>{{ t('expenses.amount') }}</th>
             <th>{{ t('expenses.description') }}</th>
             <th>{{ t('common.actions') }}</th>
@@ -129,6 +156,9 @@ watch(() => company.currentCompanyId, load);
             <td>
               <span class="font-mono text-xs font-semibold text-brand-800">{{ ex.account_code }}</span>
               <span class="ms-1.5 text-slate-700">{{ ex.account_name }}</span>
+            </td>
+            <td class="text-slate-600">
+              {{ ex.payment_method ? t(`expenses.methods.${ex.payment_method}`) : '—' }}
             </td>
             <td class="font-semibold tabular-nums">{{ Number(ex.amount).toFixed(2) }}</td>
             <td class="text-slate-600">{{ ex.description || '—' }}</td>

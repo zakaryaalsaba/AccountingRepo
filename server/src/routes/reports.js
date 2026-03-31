@@ -4,6 +4,8 @@ import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { invoicesHavePayerColumns } from '../utils/invoiceSchema.js';
 import { apTablesExist } from '../utils/apSchema.js';
+import { budgetTablesExist } from '../utils/budgetSchema.js';
+import { dimensionsTablesExist } from '../utils/dimensionsSchema.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -659,6 +661,139 @@ router.get('/ap-aging', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to build AP aging report' });
+  }
+});
+
+router.get('/budget-variance', async (req, res) => {
+  try {
+    if (!(await budgetTablesExist())) {
+      return res.status(503).json({
+        error: 'Budget schema not installed.',
+        hint: 'Run: psql $DATABASE_URL -f database/migrations/016_budgets_variance.sql',
+      });
+    }
+    const { budget_id, from, to, threshold_percent } = req.query;
+    if (!budget_id || !from || !to) {
+      return res.status(400).json({ error: 'budget_id, from, to are required' });
+    }
+    const b = await query(
+      `SELECT id, fiscal_year FROM budgets WHERE id = $1 AND company_id = $2`,
+      [budget_id, req.company.id]
+    );
+    if (!b.rows.length) return res.status(404).json({ error: 'Budget not found' });
+
+    const r = await query(
+      `WITH budget_scope AS (
+         SELECT bl.account_id,
+                SUM(bl.amount)::numeric(18,2) AS budget_amount
+         FROM budget_lines bl
+         WHERE bl.company_id = $1
+           AND bl.budget_id = $2
+           AND make_date($3::int, bl.month::int, 1) >= date_trunc('month', $4::date)
+           AND make_date($3::int, bl.month::int, 1) <= date_trunc('month', $5::date)
+         GROUP BY bl.account_id
+       ),
+       actual_scope AS (
+         SELECT a.id AS account_id,
+                CASE a.type
+                  WHEN 'REVENUE' THEN COALESCE(SUM(tl.credit - tl.debit), 0)
+                  WHEN 'EXPENSE' THEN COALESCE(SUM(tl.debit - tl.credit), 0)
+                  ELSE 0
+                END::numeric(18,2) AS actual_amount
+         FROM accounts a
+         LEFT JOIN transaction_lines tl ON tl.account_id = a.id
+         LEFT JOIN transactions t ON t.id = tl.transaction_id
+           AND t.company_id = $1
+           AND t.entry_date >= $4::date
+           AND t.entry_date <= $5::date
+         WHERE a.company_id = $1
+         GROUP BY a.id, a.type
+       )
+       SELECT a.id AS account_id,
+              a.code,
+              a.name,
+              a.type::text AS account_type,
+              COALESCE(bs.budget_amount, 0)::numeric(18,2) AS budget_amount,
+              COALESCE(ac.actual_amount, 0)::numeric(18,2) AS actual_amount
+       FROM accounts a
+       LEFT JOIN budget_scope bs ON bs.account_id = a.id
+       LEFT JOIN actual_scope ac ON ac.account_id = a.id
+       WHERE a.company_id = $1
+         AND (COALESCE(bs.budget_amount, 0) <> 0 OR COALESCE(ac.actual_amount, 0) <> 0)
+       ORDER BY a.type, a.code`,
+      [req.company.id, budget_id, Number(b.rows[0].fiscal_year), from, to]
+    );
+
+    const threshold = threshold_percent !== undefined ? Number(threshold_percent) : null;
+    const lines = r.rows.map((x) => {
+      const budget = rnd(x.budget_amount);
+      const actual = rnd(x.actual_amount);
+      const variance_amount = rnd(actual - budget);
+      const variance_percent = budget !== 0 ? rnd((variance_amount / budget) * 100) : null;
+      return { ...x, budget_amount: budget, actual_amount: actual, variance_amount, variance_percent };
+    });
+    const alerts =
+      threshold === null
+        ? []
+        : lines.filter((l) => l.variance_percent !== null && Math.abs(Number(l.variance_percent)) >= threshold);
+
+    return res.json({ budget_id, from, to, lines, alerts });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to build budget variance report' });
+  }
+});
+
+router.get('/dimensions-summary', async (req, res) => {
+  try {
+    if (!(await dimensionsTablesExist())) {
+      return res.status(503).json({
+        error: 'Dimensions schema not installed.',
+        hint: 'Run: psql $DATABASE_URL -f database/migrations/017_dimensions.sql',
+      });
+    }
+    const { from, to, dimension_id, type } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from and to are required' });
+    const params = [req.company.id, from, to];
+    let filter = '';
+    let i = 4;
+    if (dimension_id) {
+      filter += ` AND d.id = $${i++}`;
+      params.push(String(dimension_id));
+    }
+    if (type) {
+      filter += ` AND d.type = $${i++}::dimension_type`;
+      params.push(String(type));
+    }
+    const r = await query(
+      `SELECT d.id AS dimension_id,
+              d.type::text AS dimension_type,
+              d.code AS dimension_code,
+              d.name AS dimension_name,
+              a.id AS account_id,
+              a.code AS account_code,
+              a.name AS account_name,
+              a.type::text AS account_type,
+              SUM(tl.debit)::numeric(18,2) AS debit_total,
+              SUM(tl.credit)::numeric(18,2) AS credit_total
+       FROM transaction_line_dimensions tld
+       JOIN dimensions d ON d.id = tld.dimension_id AND d.company_id = $1
+       JOIN transaction_lines tl ON tl.id = tld.transaction_line_id
+       JOIN transactions t ON t.id = tl.transaction_id
+       JOIN accounts a ON a.id = tl.account_id AND a.company_id = $1
+       WHERE tld.company_id = $1
+         AND t.company_id = $1
+         AND t.entry_date >= $2::date
+         AND t.entry_date <= $3::date
+         ${filter}
+       GROUP BY d.id, d.type, d.code, d.name, a.id, a.code, a.name, a.type
+       ORDER BY d.type, d.code NULLS LAST, d.name, a.code`,
+      params
+    );
+    return res.json({ from, to, lines: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to build dimensions summary' });
   }
 });
 

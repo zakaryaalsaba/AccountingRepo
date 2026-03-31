@@ -21,12 +21,18 @@ export async function postBillRecognition(client, {
   entryDate,
   expenseAccountId,
   vendorName,
+  taxAmount = 0,
 }) {
   const amt = round2(amount);
   if (amt <= 0) return null;
+  const tax = round2(taxAmount);
+  const expenseNet = round2(amt - tax);
   const apId = await accountIdByCode(client, companyId, AP_CODE);
-  if (!apId) {
-    const err = new Error(`Missing or inactive AP account code ${AP_CODE}`);
+  const taxInputId = tax > 0 ? await accountIdByCode(client, companyId, INVOICE_GL_CODES.INPUT_TAX) : null;
+  if (!apId || (tax > 0 && !taxInputId)) {
+    const err = new Error(
+      `Missing or inactive account code ${!apId ? AP_CODE : INVOICE_GL_CODES.INPUT_TAX}`
+    );
     err.status = 400;
     throw err;
   }
@@ -41,8 +47,14 @@ export async function postBillRecognition(client, {
   const tid = txIns.rows[0].id;
   await client.query(
     `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-    [tid, expenseAccountId, amt]
+    [tid, expenseAccountId, expenseNet]
   );
+  if (tax > 0) {
+    await client.query(
+      `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+      [tid, taxInputId, tax]
+    );
+  }
   await client.query(
     `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
     [tid, apId, amt]
@@ -81,6 +93,76 @@ export async function postBillPayment(client, {
   await client.query(
     `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
     [tid, cashId, amt]
+  );
+  return tid;
+}
+
+export async function postBillCredit(client, {
+  companyId,
+  billId,
+  amount,
+  entryDate,
+  expenseAccountId,
+  vendorName,
+}) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const apId = await accountIdByCode(client, companyId, AP_CODE);
+  if (!apId) {
+    const err = new Error(`Missing or inactive AP account code ${AP_CODE}`);
+    err.status = 400;
+    throw err;
+  }
+  const ref = `BILL-CR-${String(billId).replace(/-/g, '').slice(0, 10)}`;
+  const desc = `Vendor credit — ${String(vendorName || '').slice(0, 200)}`;
+  const txIns = await client.query(
+    `INSERT INTO transactions (company_id, entry_date, description, reference)
+     VALUES ($1, $2::date, $3, $4) RETURNING id`,
+    [companyId, entryDate, desc, ref]
+  );
+  const tid = txIns.rows[0].id;
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+    [tid, apId, amt]
+  );
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+    [tid, expenseAccountId, amt]
+  );
+  return tid;
+}
+
+export async function postVendorRefundReceipt(client, {
+  companyId,
+  billId,
+  amount,
+  entryDate,
+  vendorName,
+}) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const apId = await accountIdByCode(client, companyId, AP_CODE);
+  const cashId = await accountIdByCode(client, companyId, INVOICE_GL_CODES.CASH);
+  if (!apId || !cashId) {
+    const err = new Error(`Missing active account code ${!apId ? AP_CODE : INVOICE_GL_CODES.CASH}`);
+    err.status = 400;
+    throw err;
+  }
+  const ref = `BILL-REF-${String(billId).replace(/-/g, '').slice(0, 10)}`;
+  const desc = `Vendor refund receipt — ${String(vendorName || '').slice(0, 200)}`;
+  const txIns = await client.query(
+    `INSERT INTO transactions (company_id, entry_date, description, reference)
+     VALUES ($1, $2::date, $3, $4) RETURNING id`,
+    [companyId, entryDate, desc, ref]
+  );
+  const tid = txIns.rows[0].id;
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+    [tid, cashId, amt]
+  );
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+    [tid, apId, amt]
   );
   return tid;
 }

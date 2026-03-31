@@ -14,6 +14,7 @@ import {
   invoicesHaveNumberingColumns,
   invoicesHavePayerColumns,
 } from '../utils/invoiceSchema.js';
+import { calcTax, invoicesHaveTaxColumns } from '../utils/taxSchema.js';
 import { invoiceBalanceRemaining, round2, statusFromPaidTotal } from '../accounting/invoiceBalances.js';
 import { assertDateOpen } from '../utils/periodLocks.js';
 
@@ -28,14 +29,15 @@ const SELECT_BASE = `id, company_id, customer_name, amount, status::text, invoic
 const SELECT_FULL = `${SELECT_BASE}, sale_transaction_id, payment_transaction_id`;
 
 /** Payer columns (002) plus optional GL link columns (001) — avoids 42703 if 002 ran without 001. */
-function invoiceSelectColumns(gl, payer, numbering) {
+function invoiceSelectColumns(gl, payer, numbering, taxCols) {
   const numberingCols = numbering ? ', invoice_number, invoice_template_id' : '';
+  const taxSel = taxCols ? ', subtotal_amount, tax_amount, tax_inclusive, tax_rate_id' : '';
   if (payer) {
     const glCols = gl ? ', sale_transaction_id, payment_transaction_id' : '';
-    return `${SELECT_BASE}${numberingCols}, total_amount, paid_amount, payer_type::text, payer_id${glCols}`;
+    return `${SELECT_BASE}${numberingCols}${taxSel}, total_amount, paid_amount, payer_type::text, payer_id${glCols}`;
   }
-  if (gl) return `${SELECT_FULL}${numberingCols}`;
-  return `${SELECT_BASE}${numberingCols}`;
+  if (gl) return `${SELECT_FULL}${numberingCols}${taxSel}`;
+  return `${SELECT_BASE}${numberingCols}${taxSel}`;
 }
 
 function migrationHint() {
@@ -117,7 +119,8 @@ router.get('/', async (req, res) => {
     const gl = await invoicesHaveGlColumns();
     const payer = await invoicesHavePayerColumns();
     const numbering = await invoicesHaveNumberingColumns();
-    const cols = invoiceSelectColumns(gl, payer, numbering);
+    const taxCols = await invoicesHaveTaxColumns();
+    const cols = invoiceSelectColumns(gl, payer, numbering, taxCols);
     const r = await pool.query(
       `SELECT ${cols}
        FROM invoices
@@ -156,6 +159,8 @@ router.post('/', async (req, res) => {
     invoice_template_id,
     payer_type,
     payer_id,
+    tax_rate_id,
+    tax_inclusive = false,
   } = req.body || {};
   if (!customer_name || (amount === undefined && total_amount === undefined) || !invoice_date) {
     return res.status(400).json({
@@ -172,18 +177,55 @@ router.post('/', async (req, res) => {
   const gl = await invoicesHaveGlColumns();
   const payer = await invoicesHavePayerColumns();
   const numbering = await invoicesHaveNumberingColumns();
-  const retCols = invoiceSelectColumns(gl, payer, numbering);
+  const taxCols = await invoicesHaveTaxColumns();
+  const retCols = invoiceSelectColumns(gl, payer, numbering, taxCols);
 
   const client = await pool.connect();
   try {
     await assertDateOpen(req.company.id, invoice_date, client);
     await client.query('BEGIN');
+    const dup = await client.query(
+      `SELECT id
+       FROM invoices
+       WHERE company_id = $1
+         AND customer_name = $2
+         AND invoice_date = $3
+         AND (
+           (total_amount IS NOT NULL AND total_amount = $4)
+           OR (amount IS NOT NULL AND amount = $4)
+         )
+       LIMIT 1`,
+      [req.company.id, String(customer_name).trim(), invoice_date, amt]
+    );
+    if (dup.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Possible duplicate invoice detected' });
+    }
 
     const invoiceNumber = numbering ? await nextInvoiceNumber(client, req.company.id, invoice_date) : null;
     const templateId = invoice_template_id ? String(invoice_template_id) : null;
     if (numbering) await assertValidTemplate(client, req.company.id, templateId);
 
     let inv;
+    let subtotalAmount = amt;
+    let taxAmount = 0;
+    if (taxCols && tax_rate_id) {
+      const tr = await client.query(
+        `SELECT rate_percent FROM tax_rates WHERE id = $1 AND company_id = $2 AND is_active = TRUE`,
+        [tax_rate_id, req.company.id]
+      );
+      if (!tr.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Invalid tax_rate_id' });
+      }
+      const calc = calcTax({
+        amountInput: amt,
+        ratePercent: tr.rows[0].rate_percent,
+        taxInclusive: Boolean(tax_inclusive),
+      });
+      subtotalAmount = calc.subtotal;
+      taxAmount = calc.tax;
+    }
     if (payer) {
       const pt = payer_type && PAYER_TYPES.has(payer_type) ? payer_type : 'customer';
       const pid =
@@ -199,15 +241,21 @@ router.post('/', async (req, res) => {
       const sql = numbering
         ? `INSERT INTO invoices (
              company_id, customer_name, invoice_number, invoice_template_id,
-             total_amount, paid_amount, status, invoice_date, payer_type, payer_id
+             total_amount, paid_amount, status, invoice_date, payer_type, payer_id${
+               taxCols ? ', subtotal_amount, tax_amount, tax_inclusive, tax_rate_id' : ''
+             }
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7::invoice_status, $8, $9::invoice_payer_type, $10)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::invoice_status, $8, $9::invoice_payer_type, $10${
+             taxCols ? ', $11, $12, $13, $14' : ''
+           })
            RETURNING ${retCols}`
         : `INSERT INTO invoices (
              company_id, customer_name, total_amount, paid_amount, status, invoice_date,
-             payer_type, payer_id
+             payer_type, payer_id${taxCols ? ', subtotal_amount, tax_amount, tax_inclusive, tax_rate_id' : ''}
            )
-           VALUES ($1, $2, $3, $4, $5::invoice_status, $6, $7::invoice_payer_type, $8)
+           VALUES ($1, $2, $3, $4, $5::invoice_status, $6, $7::invoice_payer_type, $8${
+             taxCols ? ', $9, $10, $11, $12' : ''
+           })
            RETURNING ${retCols}`;
       const params = numbering
         ? [
@@ -221,23 +269,76 @@ router.post('/', async (req, res) => {
             invoice_date,
             pt,
             pid,
+            ...(taxCols ? [subtotalAmount, taxAmount, Boolean(tax_inclusive), tax_rate_id || null] : []),
           ]
-        : [req.company.id, String(customer_name).trim(), amt, paidInit, stRaw, invoice_date, pt, pid];
+        : [
+            req.company.id,
+            String(customer_name).trim(),
+            amt,
+            paidInit,
+            stRaw,
+            invoice_date,
+            pt,
+            pid,
+            ...(taxCols ? [subtotalAmount, taxAmount, Boolean(tax_inclusive), tax_rate_id || null] : []),
+          ];
       const ins = await client.query(sql, params);
       inv = ins.rows[0];
     } else {
       const sql = numbering
-        ? `INSERT INTO invoices (
-             company_id, customer_name, invoice_number, invoice_template_id, amount, status, invoice_date
-           )
-           VALUES ($1, $2, $3, $4, $5, $6::invoice_status, $7)
-           RETURNING ${retCols}`
-        : `INSERT INTO invoices (company_id, customer_name, amount, status, invoice_date)
-           VALUES ($1, $2, $3, $4::invoice_status, $5)
-           RETURNING ${retCols}`;
+        ? taxCols
+          ? `INSERT INTO invoices (
+               company_id, customer_name, invoice_number, invoice_template_id, amount, status, invoice_date,
+               subtotal_amount, tax_amount, tax_inclusive, tax_rate_id
+             )
+             VALUES ($1, $2, $3, $4, $5, $6::invoice_status, $7, $8, $9, $10, $11)
+             RETURNING ${retCols}`
+          : `INSERT INTO invoices (
+               company_id, customer_name, invoice_number, invoice_template_id, amount, status, invoice_date
+             )
+             VALUES ($1, $2, $3, $4, $5, $6::invoice_status, $7)
+             RETURNING ${retCols}`
+        : taxCols
+          ? `INSERT INTO invoices (
+               company_id, customer_name, amount, status, invoice_date,
+               subtotal_amount, tax_amount, tax_inclusive, tax_rate_id
+             )
+             VALUES ($1, $2, $3, $4::invoice_status, $5, $6, $7, $8, $9)
+             RETURNING ${retCols}`
+          : `INSERT INTO invoices (
+               company_id, customer_name, amount, status, invoice_date
+             )
+             VALUES ($1, $2, $3, $4::invoice_status, $5)
+             RETURNING ${retCols}`;
       const params = numbering
-        ? [req.company.id, String(customer_name).trim(), invoiceNumber, templateId, amt, stRaw, invoice_date]
-        : [req.company.id, String(customer_name).trim(), amt, stRaw, invoice_date];
+        ? taxCols
+          ? [
+              req.company.id,
+              String(customer_name).trim(),
+              invoiceNumber,
+              templateId,
+              amt,
+              stRaw,
+              invoice_date,
+              subtotalAmount,
+              taxAmount,
+              Boolean(tax_inclusive),
+              tax_rate_id || null,
+            ]
+          : [req.company.id, String(customer_name).trim(), invoiceNumber, templateId, amt, stRaw, invoice_date]
+        : taxCols
+          ? [
+              req.company.id,
+              String(customer_name).trim(),
+              amt,
+              stRaw,
+              invoice_date,
+              subtotalAmount,
+              taxAmount,
+              Boolean(tax_inclusive),
+              tax_rate_id || null,
+            ]
+          : [req.company.id, String(customer_name).trim(), amt, stRaw, invoice_date];
       const ins = await client.query(sql, params);
       inv = ins.rows[0];
     }
@@ -263,6 +364,7 @@ router.post('/', async (req, res) => {
           companyId: req.company.id,
           invoiceId: inv.id,
           amount: amt,
+          taxAmount: taxCols ? taxAmount : 0,
           entryDate: invoice_date,
           customerName: inv.customer_name,
         });
@@ -317,7 +419,8 @@ router.patch('/:id', async (req, res) => {
   const gl = await invoicesHaveGlColumns();
   const payer = await invoicesHavePayerColumns();
   const numbering = await invoicesHaveNumberingColumns();
-  const retCols = invoiceSelectColumns(gl, payer, numbering);
+  const taxCols = await invoicesHaveTaxColumns();
+  const retCols = invoiceSelectColumns(gl, payer, numbering, taxCols);
 
   const client = await pool.connect();
   try {
@@ -738,8 +841,9 @@ router.post('/:id/credit-notes', async (req, res) => {
       ]
     );
     const numbering = await invoicesHaveNumberingColumns();
+    const taxCols = await invoicesHaveTaxColumns();
     const outInv = await client.query(
-      `SELECT ${invoiceSelectColumns(gl, true, numbering)}
+      `SELECT ${invoiceSelectColumns(gl, true, numbering, taxCols)}
        FROM invoices WHERE id = $1 AND company_id = $2`,
       [inv.id, req.company.id]
     );
@@ -760,6 +864,10 @@ router.post('/:id/credit-notes', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const gl = await invoicesHaveGlColumns();
+  const { reason } = req.body || {};
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'reason is required for delete' });
+  }
 
   if (!gl) {
     try {
@@ -796,17 +904,11 @@ router.delete('/:id', async (req, res) => {
     }
     const { invoice_date, payment_transaction_id, sale_transaction_id } = cur.rows[0];
     await assertDateOpen(req.company.id, invoice_date, client);
-    if (payment_transaction_id) {
-      await client.query('DELETE FROM transactions WHERE id = $1 AND company_id = $2', [
-        payment_transaction_id,
-        req.company.id,
-      ]);
-    }
-    if (sale_transaction_id) {
-      await client.query('DELETE FROM transactions WHERE id = $1 AND company_id = $2', [
-        sale_transaction_id,
-        req.company.id,
-      ]);
+    if (payment_transaction_id || sale_transaction_id) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Posted invoice cannot be deleted; use credit note/refund workflow instead',
+      });
     }
     const del = await client.query(
       'DELETE FROM invoices WHERE id = $1 AND company_id = $2 RETURNING id',

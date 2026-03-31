@@ -1,0 +1,41 @@
+CREATE TABLE IF NOT EXISTS tax_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  rate_percent NUMERIC(7,4) NOT NULL CHECK (rate_percent >= 0),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tax_rates_company ON tax_rates (company_id);
+
+CREATE TABLE IF NOT EXISTS tax_groups (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS tax_group_rates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  tax_group_id UUID NOT NULL REFERENCES tax_groups (id) ON DELETE CASCADE,
+  tax_rate_id UUID NOT NULL REFERENCES tax_rates (id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tax_group_id, tax_rate_id)
+);
+
+ALTER TABLE invoices
+  ADD COLUMN IF NOT EXISTS tax_rate_id UUID REFERENCES tax_rates (id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS subtotal_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE bills
+  ADD COLUMN IF NOT EXISTS tax_rate_id UUID REFERENCES tax_rates (id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS subtotal_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18,2) NOT NULL DEFAULT 0;
