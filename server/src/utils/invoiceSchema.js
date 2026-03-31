@@ -2,6 +2,7 @@ import { pool } from '../db.js';
 
 let cachedGlColumns = null;
 let cachedPayerColumns = null;
+let cachedNumberingColumns = null;
 
 /** Whether `invoices.sale_transaction_id` exists (invoice GL migration applied). */
 export async function invoicesHaveGlColumns() {
@@ -58,7 +59,27 @@ export async function paymentsTableExists() {
   }
 }
 
+/** Whether invoice numbering/template columns are present. */
+export async function invoicesHaveNumberingColumns() {
+  if (cachedNumberingColumns !== null) return cachedNumberingColumns;
+  try {
+    const r = await pool.query(
+      `SELECT COUNT(*)::int AS c
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'invoices'
+         AND column_name IN ('invoice_number', 'invoice_template_id')`
+    );
+    cachedNumberingColumns = r.rows[0].c === 2;
+    return cachedNumberingColumns;
+  } catch {
+    cachedNumberingColumns = false;
+    return false;
+  }
+}
+
 export function resetInvoiceSchemaCache() {
   cachedGlColumns = null;
   cachedPayerColumns = null;
+  cachedNumberingColumns = null;
 }

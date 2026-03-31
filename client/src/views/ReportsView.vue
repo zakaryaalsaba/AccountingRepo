@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
@@ -10,9 +10,19 @@ const company = useCompanyStore();
 const from = ref(new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10));
 const to = ref(new Date().toISOString().slice(0, 10));
 const asOf = ref(new Date().toISOString().slice(0, 10));
+const fromB = ref(new Date(new Date().getFullYear() - 1, 0, 1).toISOString().slice(0, 10));
+const toB = ref(new Date(new Date().getFullYear() - 1, 11, 31).toISOString().slice(0, 10));
+const asOfB = ref(new Date(new Date().getFullYear() - 1, 11, 31).toISOString().slice(0, 10));
 
 const pl = ref(null);
 const bs = ref(null);
+const cf = ref(null);
+const trial = ref(null);
+const accounts = ref([]);
+const ledgerAccountId = ref('');
+const ledger = ref(null);
+const plCompare = ref(null);
+const bsCompare = ref(null);
 const error = ref('');
 const loading = ref(false);
 
@@ -50,10 +60,106 @@ async function runBS() {
   }
 }
 
+async function runCF() {
+  if (!company.currentCompanyId) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const { data } = await api.get('/api/reports/cash-flow', {
+      params: { from: from.value, to: to.value },
+    });
+    cf.value = data;
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    cf.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadAccounts() {
+  if (!company.currentCompanyId) return;
+  try {
+    const { data } = await api.get('/api/accounts');
+    accounts.value = data.accounts || [];
+    if (!ledgerAccountId.value && accounts.value.length) {
+      ledgerAccountId.value = accounts.value[0].id;
+    }
+  } catch {
+    accounts.value = [];
+  }
+}
+
+async function runTrial() {
+  if (!company.currentCompanyId) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const { data } = await api.get('/api/reports/trial-balance', {
+      params: { as_of: asOf.value },
+    });
+    trial.value = data;
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    trial.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function runLedger() {
+  if (!company.currentCompanyId || !ledgerAccountId.value) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const { data } = await api.get(`/api/reports/account-ledger/${ledgerAccountId.value}`, {
+      params: { from: from.value, to: to.value },
+    });
+    ledger.value = data;
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    ledger.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function runCompare() {
+  if (!company.currentCompanyId) return;
+  loading.value = true;
+  error.value = '';
+  try {
+    const [plc, bsc] = await Promise.all([
+      api.get('/api/reports/profit-loss-compare', {
+        params: { from_a: from.value, to_a: to.value, from_b: fromB.value, to_b: toB.value },
+      }),
+      api.get('/api/reports/balance-sheet-compare', {
+        params: { as_of_a: asOf.value, as_of_b: asOfB.value },
+      }),
+    ]);
+    plCompare.value = plc.data;
+    bsCompare.value = bsc.data;
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    plCompare.value = null;
+    bsCompare.value = null;
+  } finally {
+    loading.value = false;
+  }
+}
+
 watch(() => company.currentCompanyId, () => {
   pl.value = null;
   bs.value = null;
+  cf.value = null;
+  trial.value = null;
+  ledger.value = null;
+  plCompare.value = null;
+  bsCompare.value = null;
+  loadAccounts();
 });
+
+onMounted(loadAccounts);
 </script>
 
 <template>
@@ -161,7 +267,187 @@ watch(() => company.currentCompanyId, () => {
           </ul>
         </div>
       </section>
+
+      <section class="ui-card ui-card-pad relative overflow-hidden">
+        <h2 class="ui-card-title mb-5">{{ t('reports.cashFlow') }}</h2>
+        <div class="mb-6 flex flex-wrap items-end gap-3">
+          <div>
+            <label class="ui-label">{{ t('reports.from') }}</label>
+            <input v-model="from" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <div>
+            <label class="ui-label">{{ t('reports.to') }}</label>
+            <input v-model="to" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <button type="button" class="ui-btn-primary" :disabled="loading" @click="runCF">
+            {{ t('reports.run') }}
+          </button>
+        </div>
+        <div v-if="cf" class="space-y-4 text-sm">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.operating') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(cf.operating_cash_flow).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.investing') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(cf.investing_cash_flow).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.financing') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(cf.financing_cash_flow).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 p-4 text-white shadow-lg shadow-brand-900/20">
+              <p class="text-xs font-bold uppercase tracking-wide text-brand-100">{{ t('reports.netCashFlow') }}</p>
+              <p class="mt-1 text-xl font-extrabold tabular-nums">{{ Number(cf.net_cash_flow).toFixed(2) }}</p>
+            </div>
+          </div>
+          <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
+            <li
+              v-for="row in cf.lines"
+              :key="row.transaction_id"
+              class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
+            >
+              <span>{{ row.entry_date }} — {{ row.description || '—' }} ({{ t(`reports.${row.section}`) }})</span>
+              <span class="shrink-0 tabular-nums">{{ Number(row.cash_change).toFixed(2) }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
     </div>
+
+    <div class="grid gap-6 lg:grid-cols-2 lg:gap-8">
+      <section class="ui-card ui-card-pad relative overflow-hidden">
+        <h2 class="ui-card-title mb-5">{{ t('reports.trialBalance') }}</h2>
+        <div class="mb-6 flex flex-wrap items-end gap-3">
+          <div>
+            <label class="ui-label">{{ t('reports.asOf') }}</label>
+            <input v-model="asOf" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <button type="button" class="ui-btn-primary" :disabled="loading" @click="runTrial">
+            {{ t('reports.run') }}
+          </button>
+        </div>
+        <div v-if="trial" class="space-y-4 text-sm">
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.debit') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(trial.totals.debit_total).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.credit') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(trial.totals.credit_total).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.difference') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(trial.totals.difference).toFixed(2) }}</p>
+            </div>
+          </div>
+          <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
+            <li
+              v-for="row in trial.lines"
+              :key="row.id"
+              class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
+            >
+              <span><span class="font-mono text-xs font-bold text-brand-800">{{ row.code }}</span> {{ row.name }}</span>
+              <span class="shrink-0 tabular-nums">{{ Number(row.debit_total).toFixed(2) }} / {{ Number(row.credit_total).toFixed(2) }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="ui-card ui-card-pad relative overflow-hidden">
+        <h2 class="ui-card-title mb-5">{{ t('reports.accountLedger') }}</h2>
+        <div class="mb-6 flex flex-wrap items-end gap-3">
+          <div>
+            <label class="ui-label">{{ t('reports.account') }}</label>
+            <select v-model="ledgerAccountId" class="ui-select w-[18rem] max-w-full">
+              <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.code }} — {{ a.name }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="ui-label">{{ t('reports.from') }}</label>
+            <input v-model="from" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <div>
+            <label class="ui-label">{{ t('reports.to') }}</label>
+            <input v-model="to" type="date" class="ui-input w-auto min-w-[10rem]" />
+          </div>
+          <button type="button" class="ui-btn-primary" :disabled="loading" @click="runLedger">
+            {{ t('reports.run') }}
+          </button>
+        </div>
+        <div v-if="ledger" class="space-y-4 text-sm">
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.openingBalance') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(ledger.opening_balance).toFixed(2) }}</p>
+            </div>
+            <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.closingBalance') }}</p>
+              <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(ledger.closing_balance).toFixed(2) }}</p>
+            </div>
+          </div>
+          <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
+            <li
+              v-for="(row, i) in ledger.entries"
+              :key="`${row.transaction_id}-${i}`"
+              class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
+            >
+              <span>{{ row.entry_date }} — {{ row.description || '—' }}</span>
+              <span class="shrink-0 tabular-nums">{{ Number(row.running_balance).toFixed(2) }}</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <section class="ui-card ui-card-pad relative overflow-hidden">
+      <h2 class="ui-card-title mb-5">{{ t('reports.compare') }}</h2>
+      <div class="mb-6 grid gap-3 lg:grid-cols-3">
+        <div>
+          <label class="ui-label">{{ t('reports.periodA') }} {{ t('reports.from') }}</label>
+          <input v-model="from" type="date" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('reports.periodA') }} {{ t('reports.to') }}</label>
+          <input v-model="to" type="date" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('reports.periodB') }} {{ t('reports.from') }}</label>
+          <input v-model="fromB" type="date" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('reports.periodB') }} {{ t('reports.to') }}</label>
+          <input v-model="toB" type="date" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('reports.periodA') }} {{ t('reports.asOf') }}</label>
+          <input v-model="asOf" type="date" class="ui-input" />
+        </div>
+        <div>
+          <label class="ui-label">{{ t('reports.periodB') }} {{ t('reports.asOf') }}</label>
+          <input v-model="asOfB" type="date" class="ui-input" />
+        </div>
+      </div>
+      <button type="button" class="ui-btn-primary mb-5" :disabled="loading" @click="runCompare">
+        {{ t('reports.run') }}
+      </button>
+      <div v-if="plCompare && bsCompare" class="grid gap-4 lg:grid-cols-2">
+        <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 text-sm">
+          <p class="font-semibold mb-2">{{ t('reports.pl') }}</p>
+          <p>{{ t('reports.delta') }} {{ t('reports.revenue') }}: {{ Number(plCompare.delta.revenue_total).toFixed(2) }}</p>
+          <p>{{ t('reports.delta') }} {{ t('reports.expense') }}: {{ Number(plCompare.delta.expense_total).toFixed(2) }}</p>
+          <p class="font-semibold">{{ t('reports.delta') }} {{ t('reports.net') }}: {{ Number(plCompare.delta.net_income).toFixed(2) }}</p>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100 text-sm">
+          <p class="font-semibold mb-2">{{ t('reports.bs') }}</p>
+          <p>{{ t('reports.delta') }} {{ t('reports.assets') }}: {{ Number(bsCompare.delta.assets).toFixed(2) }}</p>
+          <p>{{ t('reports.delta') }} {{ t('reports.liabilities') }}: {{ Number(bsCompare.delta.liabilities).toFixed(2) }}</p>
+          <p class="font-semibold">{{ t('reports.delta') }} {{ t('reports.equity') }}: {{ Number(bsCompare.delta.equity).toFixed(2) }}</p>
+        </div>
+      </div>
+    </section>
 
     <p v-if="error" class="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700 ring-1 ring-rose-100">
       {{ error }}

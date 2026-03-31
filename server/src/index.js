@@ -10,6 +10,10 @@ import invoicesRoutes from './routes/invoices.js';
 import paymentsRoutes from './routes/payments.js';
 import expensesRoutes from './routes/expenses.js';
 import reportsRoutes from './routes/reports.js';
+import periodsRoutes from './routes/periods.js';
+import bankAccountsRoutes from './routes/bankAccounts.js';
+import customersRoutes from './routes/customers.js';
+import invoiceTemplatesRoutes from './routes/invoiceTemplates.js';
 import clinicalRoutes from './modules/clinical/index.js';
 import staffRoutes from './modules/staff/index.js';
 
@@ -33,6 +37,10 @@ app.use('/api/invoices', invoicesRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/periods', periodsRoutes);
+app.use('/api/bank-accounts', bankAccountsRoutes);
+app.use('/api/customers', customersRoutes);
+app.use('/api/invoice-templates', invoiceTemplatesRoutes);
 app.use('/api', clinicalRoutes);
 app.use('/api', staffRoutes);
 

@@ -61,6 +61,31 @@ CREATE TABLE company_member_staff_roles (
 CREATE INDEX idx_cm_staff_roles_role ON company_member_staff_roles (staff_role_id);
 
 -- ---------------------------------------------------------------------------
+-- Period closing / locking
+-- ---------------------------------------------------------------------------
+CREATE TABLE accounting_period_locks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  is_closed BOOLEAN NOT NULL DEFAULT TRUE,
+  note TEXT,
+  closed_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  closed_at TIMESTAMPTZ,
+  reopened_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  reopened_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (period_start <= period_end),
+  UNIQUE (company_id, period_start, period_end)
+);
+
+CREATE INDEX idx_period_locks_company_range
+  ON accounting_period_locks (company_id, period_start, period_end);
+CREATE INDEX idx_period_locks_company_closed
+  ON accounting_period_locks (company_id, is_closed);
+
+-- ---------------------------------------------------------------------------
 -- Chart of accounts
 -- ---------------------------------------------------------------------------
 CREATE TYPE account_type AS ENUM (
@@ -123,10 +148,24 @@ CREATE INDEX idx_transaction_lines_account ON transaction_lines (account_id);
 CREATE TYPE invoice_status AS ENUM ('draft', 'unpaid', 'partially_paid', 'paid');
 CREATE TYPE invoice_payer_type AS ENUM ('customer', 'patient', 'insurance');
 
+CREATE TABLE invoice_templates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(120) NOT NULL,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  layout JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, name)
+);
+
+CREATE INDEX idx_invoice_templates_company ON invoice_templates (company_id);
+
 CREATE TABLE invoices (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
   customer_name VARCHAR(255) NOT NULL,
+  invoice_number VARCHAR(80),
+  invoice_template_id UUID REFERENCES invoice_templates (id) ON DELETE SET NULL,
   amount NUMERIC(18, 2) NOT NULL CHECK (amount >= 0),
   total_amount NUMERIC(18, 2) NOT NULL CHECK (total_amount >= 0),
   paid_amount NUMERIC(18, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
@@ -142,6 +181,23 @@ CREATE TABLE invoices (
 CREATE INDEX idx_invoices_company ON invoices (company_id);
 CREATE INDEX idx_invoices_sale_tx ON invoices (sale_transaction_id);
 CREATE INDEX idx_invoices_payment_tx ON invoices (payment_transaction_id);
+CREATE UNIQUE INDEX uq_invoices_company_number ON invoices (company_id, invoice_number) WHERE invoice_number IS NOT NULL;
+
+CREATE TABLE invoice_credit_notes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  invoice_id UUID NOT NULL REFERENCES invoices (id) ON DELETE CASCADE,
+  credit_date DATE NOT NULL,
+  amount NUMERIC(18,2) NOT NULL CHECK (amount > 0),
+  reason TEXT,
+  is_refund BOOLEAN NOT NULL DEFAULT FALSE,
+  credit_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  refund_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  created_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_invoice_credit_notes_company ON invoice_credit_notes (company_id, invoice_id);
 
 CREATE OR REPLACE FUNCTION invoices_sync_amount_from_total()
 RETURNS TRIGGER AS $$
@@ -210,6 +266,75 @@ CREATE TABLE expenses (
 
 CREATE INDEX idx_expenses_company ON expenses (company_id);
 CREATE INDEX idx_expenses_account ON expenses (account_id);
+
+-- ---------------------------------------------------------------------------
+-- Bank accounts & statement imports (foundation for reconciliation)
+-- ---------------------------------------------------------------------------
+CREATE TABLE bank_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  bank_name VARCHAR(255),
+  account_number_masked VARCHAR(64),
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'SAR',
+  opening_balance NUMERIC(18,2) NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bank_accounts_company ON bank_accounts (company_id);
+
+CREATE TABLE bank_statement_imports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  bank_account_id UUID NOT NULL REFERENCES bank_accounts (id) ON DELETE CASCADE,
+  source_name VARCHAR(255),
+  rows_count INTEGER NOT NULL DEFAULT 0,
+  imported_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bank_stmt_imports_company ON bank_statement_imports (company_id);
+
+CREATE TABLE bank_statement_lines (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  bank_account_id UUID NOT NULL REFERENCES bank_accounts (id) ON DELETE CASCADE,
+  import_id UUID REFERENCES bank_statement_imports (id) ON DELETE SET NULL,
+  statement_date DATE NOT NULL,
+  description TEXT,
+  reference VARCHAR(255),
+  amount NUMERIC(18,2) NOT NULL,
+  running_balance NUMERIC(18,2),
+  is_reconciled BOOLEAN NOT NULL DEFAULT FALSE,
+  reconciled_transaction_id UUID REFERENCES transactions (id) ON DELETE SET NULL,
+  reconciled_by UUID REFERENCES users (id) ON DELETE SET NULL,
+  reconciled_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_bank_stmt_lines_company_date
+  ON bank_statement_lines (company_id, bank_account_id, statement_date DESC);
+
+-- ---------------------------------------------------------------------------
+-- Customer master data (AR foundation)
+-- ---------------------------------------------------------------------------
+CREATE TABLE customers (
+  id BIGSERIAL PRIMARY KEY,
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255),
+  phone VARCHAR(50),
+  tax_id VARCHAR(100),
+  payment_terms_days INTEGER NOT NULL DEFAULT 0,
+  credit_limit NUMERIC(18,2) NOT NULL DEFAULT 0,
+  notes TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_customers_company ON customers (company_id, is_active);
 
 -- ---------------------------------------------------------------------------
 -- Clinical (MVP)

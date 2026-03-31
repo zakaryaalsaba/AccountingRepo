@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
+import { assertDateOpen } from '../utils/periodLocks.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -42,6 +43,7 @@ router.post('/', async (req, res) => {
     if (acc.rows[0].type !== 'EXPENSE') {
       return res.status(400).json({ error: 'Account must be of type EXPENSE' });
     }
+    await assertDateOpen(req.company.id, expense_date);
     const ins = await query(
       `INSERT INTO expenses (company_id, account_id, amount, description, expense_date)
        VALUES ($1, $2, $3, $4, $5)
@@ -56,6 +58,7 @@ router.post('/', async (req, res) => {
     );
     return res.status(201).json({ expense: ins.rows[0] });
   } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
     console.error(e);
     return res.status(500).json({ error: 'Failed to create expense' });
   }
@@ -85,6 +88,8 @@ router.patch('/:id', async (req, res) => {
     const nextAmount = amount !== undefined ? Number(amount) : row.amount;
     const nextDesc = description !== undefined ? description : row.description;
     const nextDate = expense_date !== undefined ? expense_date : row.expense_date;
+    await assertDateOpen(req.company.id, row.expense_date);
+    await assertDateOpen(req.company.id, nextDate);
     const upd = await query(
       `UPDATE expenses
        SET account_id = $1, amount = $2, description = $3, expense_date = $4
@@ -94,6 +99,7 @@ router.patch('/:id', async (req, res) => {
     );
     return res.json({ expense: upd.rows[0] });
   } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
     console.error(e);
     return res.status(500).json({ error: 'Failed to update expense' });
   }
@@ -101,13 +107,19 @@ router.patch('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    const cur = await query(
+      'SELECT expense_date FROM expenses WHERE id = $1 AND company_id = $2',
+      [req.params.id, req.company.id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ error: 'Not found' });
+    await assertDateOpen(req.company.id, cur.rows[0].expense_date);
     const r = await query(
       'DELETE FROM expenses WHERE id = $1 AND company_id = $2 RETURNING id',
       [req.params.id, req.company.id]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     return res.json({ ok: true });
   } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
     console.error(e);
     return res.status(500).json({ error: 'Failed to delete expense' });
   }

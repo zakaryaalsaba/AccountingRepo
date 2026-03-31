@@ -29,6 +29,9 @@ const totalCredit = computed(() =>
   entry.value.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0)
 );
 const balanced = computed(() => Math.abs(totalDebit.value - totalCredit.value) < 0.005);
+const postingAccounts = computed(() =>
+  accounts.value.filter((a) => Number(a.level) === 5 && a.is_active !== false)
+);
 
 async function load() {
   if (!company.currentCompanyId) return;
@@ -139,7 +142,7 @@ watch(() => company.currentCompanyId, load);
               <td class="px-2 py-1.5">
                 <select v-model="line.account_id" class="ui-select !bg-white">
                   <option value="">{{ t('company.none') }}</option>
-                  <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.code }} — {{ a.name }}</option>
+                  <option v-for="a in postingAccounts" :key="a.id" :value="a.id">{{ a.account_code || a.code }} — {{ a.name }}</option>
                 </select>
               </td>
               <td class="px-2 py-1.5">

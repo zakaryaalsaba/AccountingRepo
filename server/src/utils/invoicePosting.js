@@ -149,3 +149,73 @@ export async function postInvoicePayment(client, { companyId, invoiceId, amount,
   );
   return tid;
 }
+
+/**
+ * Credit note posting: Dr Revenue / Cr A/R
+ */
+export async function postInvoiceCreditNote(client, {
+  companyId,
+  invoiceId,
+  amount,
+  entryDate,
+  customerName,
+}) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const ids = await requireAccountIds(client, companyId, [INVOICE_GL_CODES.REVENUE, INVOICE_GL_CODES.AR]);
+  const revId = ids[INVOICE_GL_CODES.REVENUE];
+  const arId = ids[INVOICE_GL_CODES.AR];
+
+  const ref = `INV-CN-${String(invoiceId).replace(/-/g, '').slice(0, 10)}`;
+  const desc = `Invoice credit note — ${String(customerName).slice(0, 200)}`;
+  const txIns = await client.query(
+    `INSERT INTO transactions (company_id, entry_date, description, reference)
+     VALUES ($1, $2::date, $3, $4) RETURNING id`,
+    [companyId, entryDate, desc, ref]
+  );
+  const tid = txIns.rows[0].id;
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+    [tid, revId, amt]
+  );
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+    [tid, arId, amt]
+  );
+  return tid;
+}
+
+/**
+ * Customer refund posting: Dr A/R / Cr Cash
+ */
+export async function postInvoiceRefund(client, {
+  companyId,
+  invoiceId,
+  amount,
+  entryDate,
+  customerName,
+}) {
+  const amt = round2(amount);
+  if (amt <= 0) return null;
+  const ids = await requireAccountIds(client, companyId, [INVOICE_GL_CODES.CASH, INVOICE_GL_CODES.AR]);
+  const cashId = ids[INVOICE_GL_CODES.CASH];
+  const arId = ids[INVOICE_GL_CODES.AR];
+
+  const ref = `INV-REF-${String(invoiceId).replace(/-/g, '').slice(0, 10)}`;
+  const desc = `Invoice refund — ${String(customerName).slice(0, 200)}`;
+  const txIns = await client.query(
+    `INSERT INTO transactions (company_id, entry_date, description, reference)
+     VALUES ($1, $2::date, $3, $4) RETURNING id`,
+    [companyId, entryDate, desc, ref]
+  );
+  const tid = txIns.rows[0].id;
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
+    [tid, arId, amt]
+  );
+  await client.query(
+    `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
+    [tid, cashId, amt]
+  );
+  return tid;
+}

@@ -2,9 +2,19 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
-import { postInvoicePayment, postInvoiceSale } from '../utils/invoicePosting.js';
-import { invoicesHaveGlColumns, invoicesHavePayerColumns } from '../utils/invoiceSchema.js';
+import {
+  postInvoiceCreditNote,
+  postInvoicePayment,
+  postInvoiceRefund,
+  postInvoiceSale,
+} from '../utils/invoicePosting.js';
+import {
+  invoicesHaveGlColumns,
+  invoicesHaveNumberingColumns,
+  invoicesHavePayerColumns,
+} from '../utils/invoiceSchema.js';
 import { invoiceBalanceRemaining, round2, statusFromPaidTotal } from '../accounting/invoiceBalances.js';
+import { assertDateOpen } from '../utils/periodLocks.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -17,13 +27,14 @@ const SELECT_BASE = `id, company_id, customer_name, amount, status::text, invoic
 const SELECT_FULL = `${SELECT_BASE}, sale_transaction_id, payment_transaction_id`;
 
 /** Payer columns (002) plus optional GL link columns (001) — avoids 42703 if 002 ran without 001. */
-function invoiceSelectColumns(gl, payer) {
+function invoiceSelectColumns(gl, payer, numbering) {
+  const numberingCols = numbering ? ', invoice_number, invoice_template_id' : '';
   if (payer) {
     const glCols = gl ? ', sale_transaction_id, payment_transaction_id' : '';
-    return `${SELECT_BASE}, total_amount, paid_amount, payer_type::text, payer_id${glCols}`;
+    return `${SELECT_BASE}${numberingCols}, total_amount, paid_amount, payer_type::text, payer_id${glCols}`;
   }
-  if (gl) return SELECT_FULL;
-  return SELECT_BASE;
+  if (gl) return `${SELECT_FULL}${numberingCols}`;
+  return `${SELECT_BASE}${numberingCols}`;
 }
 
 function migrationHint() {
@@ -54,11 +65,58 @@ async function invoiceHasAllocations(client, companyId, invoiceId) {
   return r.rows.length > 0;
 }
 
+async function assertValidCustomerPayer(client, companyId, payerType, payerId) {
+  if (payerType !== 'customer' || payerId === null || payerId === undefined) return;
+  const r = await client.query(
+    `SELECT id
+     FROM customers
+     WHERE id = $1 AND company_id = $2 AND is_active = TRUE
+     LIMIT 1`,
+    [payerId, companyId]
+  );
+  if (!r.rows.length) {
+    const err = new Error('Invalid customer payer_id (customer not found or inactive)');
+    err.status = 400;
+    throw err;
+  }
+}
+
+async function assertValidTemplate(client, companyId, templateId) {
+  if (!templateId) return;
+  const r = await client.query(
+    `SELECT id FROM invoice_templates WHERE id = $1 AND company_id = $2 LIMIT 1`,
+    [templateId, companyId]
+  );
+  if (!r.rows.length) {
+    const err = new Error('Invalid invoice_template_id');
+    err.status = 400;
+    throw err;
+  }
+}
+
+async function nextInvoiceNumber(client, companyId, invoiceDate) {
+  const year = String(invoiceDate).slice(0, 4);
+  const prefix = `INV-${year}-`;
+  const r = await client.query(
+    `SELECT invoice_number
+     FROM invoices
+     WHERE company_id = $1
+       AND invoice_number LIKE $2
+     ORDER BY invoice_number DESC
+     LIMIT 1`,
+    [companyId, `${prefix}%`]
+  );
+  const last = r.rows[0]?.invoice_number || '';
+  const n = last ? parseInt(last.slice(prefix.length), 10) + 1 : 1;
+  return `${prefix}${String(Number.isNaN(n) ? 1 : n).padStart(6, '0')}`;
+}
+
 router.get('/', async (req, res) => {
   try {
     const gl = await invoicesHaveGlColumns();
     const payer = await invoicesHavePayerColumns();
-    const cols = invoiceSelectColumns(gl, payer);
+    const numbering = await invoicesHaveNumberingColumns();
+    const cols = invoiceSelectColumns(gl, payer, numbering);
     const r = await pool.query(
       `SELECT ${cols}
        FROM invoices
@@ -94,6 +152,7 @@ router.post('/', async (req, res) => {
     total_amount,
     status,
     invoice_date,
+    invoice_template_id,
     payer_type,
     payer_id,
   } = req.body || {};
@@ -111,11 +170,17 @@ router.post('/', async (req, res) => {
 
   const gl = await invoicesHaveGlColumns();
   const payer = await invoicesHavePayerColumns();
-  const retCols = invoiceSelectColumns(gl, payer);
+  const numbering = await invoicesHaveNumberingColumns();
+  const retCols = invoiceSelectColumns(gl, payer, numbering);
 
   const client = await pool.connect();
   try {
+    await assertDateOpen(req.company.id, invoice_date, client);
     await client.query('BEGIN');
+
+    const invoiceNumber = numbering ? await nextInvoiceNumber(client, req.company.id, invoice_date) : null;
+    const templateId = invoice_template_id ? String(invoice_template_id) : null;
+    if (numbering) await assertValidTemplate(client, req.company.id, templateId);
 
     let inv;
     if (payer) {
@@ -128,33 +193,51 @@ router.post('/', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Invalid payer_id' });
       }
+      await assertValidCustomerPayer(client, req.company.id, pt, pid);
       const paidInit = stRaw === 'paid' ? amt : 0;
-      const ins = await client.query(
-        `INSERT INTO invoices (
-           company_id, customer_name, total_amount, paid_amount, status, invoice_date,
-           payer_type, payer_id
-         )
-         VALUES ($1, $2, $3, $4, $5::invoice_status, $6, $7::invoice_payer_type, $8)
-         RETURNING ${retCols}`,
-        [
-          req.company.id,
-          String(customer_name).trim(),
-          amt,
-          paidInit,
-          stRaw,
-          invoice_date,
-          pt,
-          pid,
-        ]
-      );
+      const sql = numbering
+        ? `INSERT INTO invoices (
+             company_id, customer_name, invoice_number, invoice_template_id,
+             total_amount, paid_amount, status, invoice_date, payer_type, payer_id
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7::invoice_status, $8, $9::invoice_payer_type, $10)
+           RETURNING ${retCols}`
+        : `INSERT INTO invoices (
+             company_id, customer_name, total_amount, paid_amount, status, invoice_date,
+             payer_type, payer_id
+           )
+           VALUES ($1, $2, $3, $4, $5::invoice_status, $6, $7::invoice_payer_type, $8)
+           RETURNING ${retCols}`;
+      const params = numbering
+        ? [
+            req.company.id,
+            String(customer_name).trim(),
+            invoiceNumber,
+            templateId,
+            amt,
+            paidInit,
+            stRaw,
+            invoice_date,
+            pt,
+            pid,
+          ]
+        : [req.company.id, String(customer_name).trim(), amt, paidInit, stRaw, invoice_date, pt, pid];
+      const ins = await client.query(sql, params);
       inv = ins.rows[0];
     } else {
-      const ins = await client.query(
-        `INSERT INTO invoices (company_id, customer_name, amount, status, invoice_date)
-         VALUES ($1, $2, $3, $4::invoice_status, $5)
-         RETURNING ${retCols}`,
-        [req.company.id, String(customer_name).trim(), amt, stRaw, invoice_date]
-      );
+      const sql = numbering
+        ? `INSERT INTO invoices (
+             company_id, customer_name, invoice_number, invoice_template_id, amount, status, invoice_date
+           )
+           VALUES ($1, $2, $3, $4, $5, $6::invoice_status, $7)
+           RETURNING ${retCols}`
+        : `INSERT INTO invoices (company_id, customer_name, amount, status, invoice_date)
+           VALUES ($1, $2, $3, $4::invoice_status, $5)
+           RETURNING ${retCols}`;
+      const params = numbering
+        ? [req.company.id, String(customer_name).trim(), invoiceNumber, templateId, amt, stRaw, invoice_date]
+        : [req.company.id, String(customer_name).trim(), amt, stRaw, invoice_date];
+      const ins = await client.query(sql, params);
       inv = ins.rows[0];
     }
 
@@ -226,12 +309,14 @@ router.patch('/:id', async (req, res) => {
     total_amount,
     status,
     invoice_date,
+    invoice_template_id,
     payer_type,
     payer_id,
   } = req.body || {};
   const gl = await invoicesHaveGlColumns();
   const payer = await invoicesHavePayerColumns();
-  const retCols = invoiceSelectColumns(gl, payer);
+  const numbering = await invoicesHaveNumberingColumns();
+  const retCols = invoiceSelectColumns(gl, payer, numbering);
 
   const client = await pool.connect();
   try {
@@ -248,6 +333,8 @@ router.patch('/:id', async (req, res) => {
 
     const nextName = customer_name !== undefined ? String(customer_name).trim() : row.customer_name;
     const nextDate = invoice_date !== undefined ? invoice_date : row.invoice_date;
+    await assertDateOpen(req.company.id, row.invoice_date, client);
+    await assertDateOpen(req.company.id, nextDate, client);
 
     let nextTotal = payer
       ? Number(total_amount !== undefined ? total_amount : amount !== undefined ? amount : row.total_amount)
@@ -262,6 +349,13 @@ router.patch('/:id', async (req, res) => {
     let nextStatus = row.status;
     let payerType = row.payer_type;
     let payerId = row.payer_id;
+    const nextTemplateId =
+      numbering && invoice_template_id !== undefined
+        ? invoice_template_id
+          ? String(invoice_template_id)
+          : null
+        : row.invoice_template_id;
+    if (numbering) await assertValidTemplate(client, req.company.id, nextTemplateId);
 
     if (payer) {
       if (payer_type !== undefined) {
@@ -282,6 +376,7 @@ router.patch('/:id', async (req, res) => {
           payerId = n;
         }
       }
+      await assertValidCustomerPayer(client, req.company.id, payerType, payerId);
     }
 
     if (status !== undefined) {
@@ -399,17 +494,42 @@ router.patch('/:id', async (req, res) => {
              status = $4::invoice_status,
              invoice_date = $5,
              payer_type = $6::invoice_payer_type,
-             payer_id = $7
-         WHERE id = $8 AND company_id = $9`,
-        [nextName, nextTotal, nextPaid, nextStatus, nextDate, payerType, payerId, req.params.id, req.company.id]
+             payer_id = $7,
+             invoice_template_id = $8
+         WHERE id = $9 AND company_id = $10`,
+        [
+          nextName,
+          nextTotal,
+          nextPaid,
+          nextStatus,
+          nextDate,
+          payerType,
+          payerId,
+          nextTemplateId,
+          req.params.id,
+          req.company.id,
+        ]
       );
     } else {
-      await client.query(
-        `UPDATE invoices
-         SET customer_name = $1, amount = $2, status = $3::invoice_status, invoice_date = $4
-         WHERE id = $5 AND company_id = $6`,
-        [nextName, nextTotal, nextStatus, nextDate, req.params.id, req.company.id]
-      );
+      if (numbering) {
+        await client.query(
+          `UPDATE invoices
+           SET customer_name = $1,
+               amount = $2,
+               status = $3::invoice_status,
+               invoice_date = $4,
+               invoice_template_id = $5
+           WHERE id = $6 AND company_id = $7`,
+          [nextName, nextTotal, nextStatus, nextDate, nextTemplateId, req.params.id, req.company.id]
+        );
+      } else {
+        await client.query(
+          `UPDATE invoices
+           SET customer_name = $1, amount = $2, status = $3::invoice_status, invoice_date = $4
+           WHERE id = $5 AND company_id = $6`,
+          [nextName, nextTotal, nextStatus, nextDate, req.params.id, req.company.id]
+        );
+      }
     }
 
     if (gl) {
@@ -477,18 +597,173 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+router.get('/:id/credit-notes', async (req, res) => {
+  try {
+    const inv = await pool.query(`SELECT id FROM invoices WHERE id = $1 AND company_id = $2`, [
+      req.params.id,
+      req.company.id,
+    ]);
+    if (!inv.rows.length) return res.status(404).json({ error: 'Invoice not found' });
+    const r = await pool.query(
+      `SELECT *
+       FROM invoice_credit_notes
+       WHERE company_id = $1 AND invoice_id = $2
+       ORDER BY credit_date DESC, created_at DESC`,
+      [req.company.id, req.params.id]
+    );
+    return res.json({ credit_notes: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list credit notes' });
+  }
+});
+
+router.post('/:id/credit-notes', async (req, res) => {
+  const { amount, credit_date, reason, is_refund = false } = req.body || {};
+  const amt = round2(Number(amount));
+  if (!credit_date || !amt || amt <= 0) {
+    return res.status(400).json({ error: 'credit_date and positive amount are required' });
+  }
+
+  const payer = await invoicesHavePayerColumns();
+  if (!payer) {
+    return res.status(503).json({
+      error: 'Credit notes require payer schema.',
+      hint: 'Run: psql $DATABASE_URL -f database/migrations/002_payments_invoice_payer.sql',
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await assertDateOpen(req.company.id, credit_date, client);
+    await client.query('BEGIN');
+    const invRes = await client.query(
+      `SELECT * FROM invoices WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [req.params.id, req.company.id]
+    );
+    if (!invRes.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const inv = invRes.rows[0];
+    if (inv.status === 'draft') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cannot credit a draft invoice' });
+    }
+
+    const total = round2(inv.total_amount);
+    const paid = round2(inv.paid_amount);
+    const open = round2(total - paid);
+
+    if (!is_refund && amt > open + 0.0001) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Credit amount exceeds outstanding balance' });
+    }
+    if (is_refund && amt > paid + 0.0001) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Refund credit amount exceeds paid amount' });
+    }
+
+    const newTotal = round2(total - amt);
+    const newPaid = is_refund ? round2(paid - amt) : paid;
+    if (newTotal < 0 || newPaid < 0 || newPaid > newTotal + 0.0001) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Credit note would result in invalid invoice balances',
+      });
+    }
+    const nextStatus = statusFromPaidTotal(newTotal, newPaid);
+
+    const gl = await invoicesHaveGlColumns();
+    let creditTxId = null;
+    let refundTxId = null;
+    if (gl) {
+      creditTxId = await postInvoiceCreditNote(client, {
+        companyId: req.company.id,
+        invoiceId: inv.id,
+        amount: amt,
+        entryDate: credit_date,
+        customerName: inv.customer_name,
+      });
+      if (is_refund) {
+        refundTxId = await postInvoiceRefund(client, {
+          companyId: req.company.id,
+          invoiceId: inv.id,
+          amount: amt,
+          entryDate: credit_date,
+          customerName: inv.customer_name,
+        });
+      }
+    }
+
+    await client.query(
+      `UPDATE invoices
+       SET total_amount = $1,
+           amount = $1,
+           paid_amount = $2,
+           status = $3::invoice_status
+       WHERE id = $4 AND company_id = $5`,
+      [newTotal, newPaid, nextStatus, inv.id, req.company.id]
+    );
+    const cn = await client.query(
+      `INSERT INTO invoice_credit_notes (
+         company_id, invoice_id, credit_date, amount, reason, is_refund,
+         credit_transaction_id, refund_transaction_id, created_by
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        req.company.id,
+        inv.id,
+        credit_date,
+        amt,
+        reason ? String(reason) : null,
+        Boolean(is_refund),
+        creditTxId,
+        refundTxId,
+        req.user.id,
+      ]
+    );
+    const numbering = await invoicesHaveNumberingColumns();
+    const outInv = await client.query(
+      `SELECT ${invoiceSelectColumns(gl, true, numbering)}
+       FROM invoices WHERE id = $1 AND company_id = $2`,
+      [inv.id, req.company.id]
+    );
+    await client.query('COMMIT');
+    return res.status(201).json({
+      credit_note: cn.rows[0],
+      invoice: enrichInvoice(outInv.rows[0], true),
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.status === 400) return res.status(400).json({ error: e.message });
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to create credit note' });
+  } finally {
+    client.release();
+  }
+});
+
 router.delete('/:id', async (req, res) => {
   const gl = await invoicesHaveGlColumns();
 
   if (!gl) {
     try {
+      const cur = await pool.query(
+        'SELECT invoice_date FROM invoices WHERE id = $1 AND company_id = $2',
+        [req.params.id, req.company.id]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Not found' });
+      await assertDateOpen(req.company.id, cur.rows[0].invoice_date);
+
       const r = await pool.query(
         'DELETE FROM invoices WHERE id = $1 AND company_id = $2 RETURNING id',
         [req.params.id, req.company.id]
       );
-      if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
       return res.json({ ok: true });
     } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: e.message });
       console.error(e);
       return res.status(500).json({ error: 'Failed to delete invoice' });
     }
@@ -498,14 +773,16 @@ router.delete('/:id', async (req, res) => {
   try {
     await client.query('BEGIN');
     const cur = await client.query(
-      `SELECT sale_transaction_id, payment_transaction_id FROM invoices WHERE id = $1 AND company_id = $2`,
+      `SELECT invoice_date, sale_transaction_id, payment_transaction_id
+       FROM invoices WHERE id = $1 AND company_id = $2`,
       [req.params.id, req.company.id]
     );
     if (!cur.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Not found' });
     }
-    const { payment_transaction_id, sale_transaction_id } = cur.rows[0];
+    const { invoice_date, payment_transaction_id, sale_transaction_id } = cur.rows[0];
+    await assertDateOpen(req.company.id, invoice_date, client);
     if (payment_transaction_id) {
       await client.query('DELETE FROM transactions WHERE id = $1 AND company_id = $2', [
         payment_transaction_id,

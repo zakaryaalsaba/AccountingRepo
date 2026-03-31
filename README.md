@@ -21,10 +21,16 @@ Create schema (Docker maps Postgres to **host port 5433** so it does not fight w
 psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/schema.sql
 ```
 
-**Already have a database?** Apply incremental SQL under `database/migrations/` in order (e.g. invoice GL columns):
+**Already have a database?** Apply incremental SQL under `database/migrations/` in order:
 
 ```bash
 psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/001_invoice_gl_postings.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/002_payments_invoice_payer.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/003_period_locks.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/004_bank_accounts_and_statements.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/005_bank_reconciliation_columns.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/006_customers.sql
+psql "postgresql://postgres:postgres@localhost:5433/accounting_saas" -f database/migrations/007_invoice_numbering_templates.sql
 ```
 
 **Invoices** auto-post journals: creating a non-draft invoice posts **Dr A/R (1100) / Cr Revenue (4000)**; marking **paid** posts **Dr Cash (1000) / Cr A/R (1100)**. Draft invoices are not posted until status leaves draft.
