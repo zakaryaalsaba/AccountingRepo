@@ -1,12 +1,11 @@
 <script setup>
 import { ref } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
 
 const { t } = useI18n();
 const router = useRouter();
-const route = useRoute();
 const auth = useAuthStore();
 
 const email = ref('');
@@ -17,8 +16,9 @@ async function submit() {
   error.value = '';
   try {
     await auth.login(email.value, password.value);
-    const redirect = route.query.redirect || '/';
-    await router.replace(String(redirect));
+    // Always start a fresh session from dashboard entry.
+    // Router guards will move non-owner roles to their first allowed module.
+    await router.replace({ name: 'dashboard' });
   } catch (e) {
     error.value = e.response?.data?.error || t('common.error');
   }

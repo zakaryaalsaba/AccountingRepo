@@ -7,8 +7,11 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed:demo": "node scripts/seedDemoData.mjs",
+    "backfill:voucher-refs:dry": "node scripts/backfillVoucherReferences.mjs",
+    "backfill:voucher-refs:apply": "APPLY=1 node scripts/backfillVoucherReferences.mjs",
     "test:integration": "node --test tests/postingWorkflows.test.mjs",
-    "test:smoke": "node tests/smoke.e2e.mjs"
+    "test:smoke": "node tests/smoke.e2e.mjs",
+    "test:isolation": "node --test tests/multiCompanyIsolation.test.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

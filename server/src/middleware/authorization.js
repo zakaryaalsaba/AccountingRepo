@@ -71,3 +71,24 @@ export function requirePermission(permissionKey) {
   };
 }
 
+export async function assertRoleAmountLimit({ companyId, role, actionKey, amount }) {
+  const v = Number(amount || 0);
+  if (v <= 0) return;
+  const r = await query(
+    `SELECT max_amount
+     FROM role_action_limits
+     WHERE company_id = $1
+       AND role = $2
+       AND action_key = $3
+     LIMIT 1`,
+    [companyId, String(role), String(actionKey)]
+  );
+  if (!r.rows.length) return;
+  const max = Number(r.rows[0].max_amount || 0);
+  if (v > max) {
+    const err = new Error(`Amount exceeds role limit for ${actionKey}. Max allowed: ${max}`);
+    err.status = 403;
+    throw err;
+  }
+}
+

@@ -17,3 +17,27 @@ export async function writeAuditEvent({
   );
 }
 
+export async function writeSnapshotAuditEvent({
+  companyId,
+  actorUserId = null,
+  eventType,
+  entityType,
+  entityId = null,
+  before = null,
+  after = null,
+  metadata = {},
+}) {
+  return writeAuditEvent({
+    companyId,
+    actorUserId,
+    eventType,
+    entityType,
+    entityId,
+    details: {
+      before,
+      after,
+      metadata: metadata || {},
+    },
+  });
+}
+

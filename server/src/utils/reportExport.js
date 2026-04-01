@@ -14,9 +14,72 @@ export function toCsv(columns, rows) {
   return `${head}\n${body}\n`;
 }
 
+function xmlEscape(v) {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function detectType(v) {
+  if (v === null || v === undefined || v === '') return 'String';
+  if (typeof v === 'number' && Number.isFinite(v)) return 'Number';
+  if (v instanceof Date) return 'DateTime';
+  if (typeof v === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return 'DateTime';
+    if (!Number.isNaN(Number(v)) && String(v).trim() !== '') return 'Number';
+  }
+  return 'String';
+}
+
+export function toExcelXml(columns, rows, sheetName = 'Report') {
+  const cleanSheet = String(sheetName || 'Report').replace(/[\\/?*:[\]]/g, '_').slice(0, 31) || 'Report';
+  const headerCells = columns
+    .map((c) => `<Cell><Data ss:Type="String">${xmlEscape(c.label || c.key)}</Data></Cell>`)
+    .join('');
+  const rowXml = rows
+    .map((r) => {
+      const cells = columns
+        .map((c) => {
+          const val = r[c.key];
+          const t = detectType(val);
+          if (t === 'Number') return `<Cell><Data ss:Type="Number">${Number(val)}</Data></Cell>`;
+          return `<Cell><Data ss:Type="${t}">${xmlEscape(val)}</Data></Cell>`;
+        })
+        .join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('');
+  const xml = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Worksheet ss:Name="${xmlEscape(cleanSheet)}">
+  <Table>
+   <Row>${headerCells}</Row>
+   ${rowXml}
+  </Table>
+ </Worksheet>
+</Workbook>`;
+  return Buffer.from(xml, 'utf8');
+}
+
 // Minimal one-page PDF builder (text-only). Good enough for report exports without external deps.
-export function toSimplePdf(title, columns, rows) {
+export function toSimplePdf(title, columns, rows, options = {}) {
+  const {
+    logoText = '',
+    signatureLine = '',
+    stampText = '',
+    footerMetadata = '',
+    preparedBy = '',
+    approvedBy = '',
+  } = options || {};
   const lines = [];
+  if (logoText) lines.push(`Logo: ${logoText}`);
   lines.push(String(title || 'Report'));
   lines.push('');
   lines.push(columns.map((c) => String(c.label || c.key)).join(' | '));
@@ -24,6 +87,11 @@ export function toSimplePdf(title, columns, rows) {
   for (const r of rows) {
     lines.push(columns.map((c) => String(r[c.key] ?? '')).join(' | '));
   }
+  lines.push('-'.repeat(100));
+  if (signatureLine) lines.push(`Signatures: ${signatureLine}`);
+  if (preparedBy || approvedBy) lines.push(`Prepared by: ${preparedBy || '-'} | Approved by: ${approvedBy || '-'}`);
+  if (stampText) lines.push(`Stamp: ${stampText}`);
+  if (footerMetadata) lines.push(`Footer: ${footerMetadata}`);
   const text = lines.join('\n');
   const esc = text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 

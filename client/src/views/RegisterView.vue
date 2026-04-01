@@ -17,7 +17,7 @@ async function submit() {
   error.value = '';
   try {
     await auth.register({ email: email.value, password: password.value, full_name: full_name.value });
-    await router.replace('/');
+    await router.replace({ name: 'dashboard' });
   } catch (e) {
     error.value = e.response?.data?.error || t('common.error');
   }

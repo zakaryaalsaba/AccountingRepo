@@ -35,6 +35,10 @@ async function main() {
     '/api/reports/dashboard',
     '/api/reports/profit-loss?from=2026-01-01&to=2026-12-31',
     '/api/reports/balance-sheet?as_of=2026-12-31',
+    '/api/reports/catalog',
+    '/api/enterprise/feature-flags',
+    '/api/service-invoices',
+    '/api/projects',
   ];
   for (const path of checks) {
     const r = await fetch(`${API_BASE_URL}${path}`, { headers });

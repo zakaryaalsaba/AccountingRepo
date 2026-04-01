@@ -4,6 +4,8 @@ import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { periodLocksTableExists } from '../utils/periodLocks.js';
 import { attachAuthorization, requirePermission, requireRole } from '../middleware/authorization.js';
+import { assertRoleAmountLimit } from '../middleware/authorization.js';
+import { workflowTablesExist } from '../utils/workflowSchema.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -133,7 +135,7 @@ router.post('/year-close', async (req, res) => {
         hint: migrationHint(),
       });
     }
-    const { year, retained_earnings_account_id, note } = req.body || {};
+    const { year, retained_earnings_account_id, note, approval_request_id = null } = req.body || {};
     const y = Number(year);
     if (!Number.isInteger(y) || y < 2000 || y > 3000) {
       return res.status(400).json({ error: 'year must be a valid integer (e.g. 2026)' });
@@ -207,6 +209,46 @@ router.post('/year-close', async (req, res) => {
       }
     }
     const netIncome = round2(revenueTotal - expenseTotal);
+    await assertRoleAmountLimit({
+      companyId: req.company.id,
+      role: req.authorization?.role || 'viewer',
+      actionKey: 'periods.year_close',
+      amount: Math.abs(netIncome),
+    });
+    if (await workflowTablesExist()) {
+      const needs = await query(
+        `SELECT id
+         FROM workflow_approval_rules
+         WHERE company_id = $1
+           AND doc_type = 'periods.year_close'
+           AND is_active = TRUE
+           AND min_amount <= $2
+         ORDER BY min_amount DESC
+         LIMIT 1`,
+        [req.company.id, Math.abs(netIncome)]
+      );
+      if (needs.rows.length) {
+        if (!approval_request_id) {
+          return res.status(403).json({ error: 'Approval required for year-close', required_doc_type: 'periods.year_close' });
+        }
+        const ap = await query(
+          `SELECT *
+           FROM workflow_approval_requests
+           WHERE id = $1
+             AND company_id = $2
+             AND doc_type = 'periods.year_close'
+             AND status = 'approved'
+           LIMIT 1`,
+          [approval_request_id, req.company.id]
+        );
+        if (!ap.rows.length) {
+          return res.status(403).json({ error: 'Invalid or non-approved approval_request_id for year-close' });
+        }
+        if (ap.rows[0].requested_by && ap.rows[0].requested_by === req.user.id) {
+          return res.status(400).json({ error: 'Maker-checker violation: requester cannot execute year-close' });
+        }
+      }
+    }
 
     let retainedId = retained_earnings_account_id || null;
     if (netIncome !== 0) {

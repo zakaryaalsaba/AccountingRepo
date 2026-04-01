@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { enterpriseSchemaHint, enterpriseTablesExist } from '../utils/enterpriseSchema.js';
+import { featureFlagsSchemaHint, featureFlagsTableExists } from '../utils/featureFlags.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -17,13 +18,16 @@ router.use(async (_req, res, next) => {
 // Background jobs
 router.post('/jobs/enqueue', async (req, res) => {
   try {
-    const { queue_name, payload = {}, run_after = null, max_attempts = 3 } = req.body || {};
+    const { queue_name, payload = {}, run_after = null, max_attempts = 3, cache_key = null } = req.body || {};
     if (!queue_name) return res.status(400).json({ error: 'queue_name is required' });
+    const normalizedPayload = { ...(payload || {}), company_id: req.company.id };
+    const normalizedQueue = `${req.company.id}:${String(queue_name)}`;
+    const normalizedCacheKey = cache_key ? `${req.company.id}:${String(cache_key)}` : null;
     const ins = await query(
       `INSERT INTO background_jobs (company_id, queue_name, payload, run_after, max_attempts)
        VALUES ($1,$2,$3::jsonb,COALESCE($4::timestamptz, NOW()),$5)
        RETURNING *`,
-      [req.company.id, String(queue_name), JSON.stringify(payload || {}), run_after, Number(max_attempts || 3)]
+      [req.company.id, normalizedQueue, JSON.stringify({ ...normalizedPayload, _cache_key: normalizedCacheKey }), run_after, Number(max_attempts || 3)]
     );
     return res.status(201).json({ job: ins.rows[0] });
   } catch (e) {
@@ -104,7 +108,7 @@ router.post('/webhooks/emit', async (req, res) => {
         `INSERT INTO webhook_deliveries (company_id, subscription_id, event_type, event_payload, status, attempts, next_attempt_at)
          VALUES ($1,$2,$3,$4::jsonb,'queued',0,NOW())
          RETURNING *`,
-        [req.company.id, s.id, String(event_type), JSON.stringify(payload || {})]
+        [req.company.id, s.id, String(event_type), JSON.stringify({ ...(payload || {}), company_id: req.company.id })]
       );
       out.push(ins.rows[0]);
     }
@@ -214,6 +218,54 @@ router.post('/restores/:id/complete', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to complete restore request' });
+  }
+});
+
+router.get('/feature-flags', async (req, res) => {
+  try {
+    if (!(await featureFlagsTableExists())) {
+      return res.status(503).json({ error: 'Feature flags schema not installed.', hint: featureFlagsSchemaHint() });
+    }
+    const r = await query(
+      `SELECT *
+       FROM company_feature_flags
+       WHERE company_id = $1
+       ORDER BY module_key`,
+      [req.company.id]
+    );
+    return res.json({ feature_flags: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list feature flags' });
+  }
+});
+
+router.post('/feature-flags/upsert', async (req, res) => {
+  try {
+    if (!(await featureFlagsTableExists())) {
+      return res.status(503).json({ error: 'Feature flags schema not installed.', hint: featureFlagsSchemaHint() });
+    }
+    const { module_key, is_enabled, rollout_stage = 'ga', note = null } = req.body || {};
+    if (!module_key || is_enabled === undefined) {
+      return res.status(400).json({ error: 'module_key and is_enabled are required' });
+    }
+    const up = await query(
+      `INSERT INTO company_feature_flags (company_id, module_key, is_enabled, rollout_stage, note, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (company_id, module_key)
+       DO UPDATE SET
+         is_enabled = EXCLUDED.is_enabled,
+         rollout_stage = EXCLUDED.rollout_stage,
+         note = EXCLUDED.note,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = NOW()
+       RETURNING *`,
+      [req.company.id, String(module_key), Boolean(is_enabled), String(rollout_stage), note ? String(note) : null, req.user.id]
+    );
+    return res.status(201).json({ feature_flag: up.rows[0] });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to upsert feature flag' });
   }
 });
 

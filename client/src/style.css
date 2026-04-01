@@ -144,6 +144,13 @@
     @apply ui-badge bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200/80;
   }
 
+  .ui-sticky-entry-footer {
+    position: sticky;
+    bottom: 0.5rem;
+    z-index: 20;
+    @apply rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur;
+  }
+
   .ui-stat {
     @apply relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card;
     @apply transition-all duration-300 hover:border-brand-200/60 hover:shadow-glow;

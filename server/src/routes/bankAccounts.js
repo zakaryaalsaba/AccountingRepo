@@ -2,9 +2,12 @@ import { Router } from 'express';
 import { pool, query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
+import { attachAuthorization, requireRole } from '../middleware/authorization.js';
+import { bankSettlementSchemaHint, bankSettlementTablesExist } from '../utils/bankSettlementSchema.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
+router.use(attachAuthorization);
 
 router.get('/', async (req, res) => {
   try {
@@ -490,6 +493,393 @@ router.get('/statements/reconciliation-exceptions', async (req, res) => {
     console.error(e);
     return res.status(500).json({ error: 'Failed to load reconciliation exceptions' });
   }
+});
+
+router.get('/statements/match-suggestions', async (req, res) => {
+  try {
+    const { bank_account_id, line_id, date_window_days = '3' } = req.query;
+    if (!bank_account_id || !line_id) {
+      return res.status(400).json({ error: 'bank_account_id and line_id are required' });
+    }
+    const wnd = Math.max(0, Math.min(30, Number(date_window_days) || 3));
+    const line = await query(
+      `SELECT *
+       FROM bank_statement_lines
+       WHERE id = $1 AND company_id = $2 AND bank_account_id = $3`,
+      [line_id, req.company.id, bank_account_id]
+    );
+    if (!line.rows.length) return res.status(404).json({ error: 'Statement line not found' });
+    const l = line.rows[0];
+    const exact = await query(
+      `SELECT t.id, t.entry_date, t.description, t.reference,
+              ABS((COALESCE(tx.net_amount,0)::numeric(18,2)) - $4::numeric(18,2)) AS amount_diff
+       FROM transactions t
+       LEFT JOIN (
+         SELECT tl.transaction_id, (SUM(tl.debit) - SUM(tl.credit))::numeric(18,2) AS net_amount
+         FROM transaction_lines tl
+         GROUP BY tl.transaction_id
+       ) tx ON tx.transaction_id = t.id
+       WHERE t.company_id = $1
+         AND t.entry_date BETWEEN ($2::date - ($5 || ' days')::interval)::date
+                             AND ($3::date + ($5 || ' days')::interval)::date
+         AND ABS(COALESCE(tx.net_amount,0) - $4::numeric) < 0.01
+       ORDER BY amount_diff ASC, t.entry_date DESC
+       LIMIT 50`,
+      [req.company.id, l.statement_date, l.statement_date, l.amount, String(wnd)]
+    );
+    const fuzzy = await query(
+      `SELECT t.id, t.entry_date, t.description, t.reference,
+              ABS((COALESCE(tx.net_amount,0)::numeric(18,2)) - $4::numeric(18,2)) AS amount_diff
+       FROM transactions t
+       LEFT JOIN (
+         SELECT tl.transaction_id, (SUM(tl.debit) - SUM(tl.credit))::numeric(18,2) AS net_amount
+         FROM transaction_lines tl
+         GROUP BY tl.transaction_id
+       ) tx ON tx.transaction_id = t.id
+       WHERE t.company_id = $1
+         AND t.entry_date BETWEEN ($2::date - ($5 || ' days')::interval)::date
+                             AND ($3::date + ($5 || ' days')::interval)::date
+         AND ABS(COALESCE(tx.net_amount,0) - $4::numeric) <= 10
+       ORDER BY amount_diff ASC, t.entry_date DESC
+       LIMIT 50`,
+      [req.company.id, l.statement_date, l.statement_date, l.amount, String(wnd)]
+    );
+    return res.json({ line: l, exact_matches: exact.rows, fuzzy_matches: fuzzy.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load match suggestions' });
+  }
+});
+
+router.post('/statements/manual-pair', async (req, res) => {
+  try {
+    const { line_id, transaction_id, force = false } = req.body || {};
+    if (!line_id || !transaction_id) {
+      return res.status(400).json({ error: 'line_id and transaction_id are required' });
+    }
+    const line = await query(
+      `SELECT *
+       FROM bank_statement_lines
+       WHERE id = $1 AND company_id = $2`,
+      [line_id, req.company.id]
+    );
+    if (!line.rows.length) return res.status(404).json({ error: 'Statement line not found' });
+    const tx = await query(
+      `SELECT t.id,
+              t.entry_date,
+              (SELECT (SUM(tl.debit) - SUM(tl.credit))::numeric(18,2)
+               FROM transaction_lines tl WHERE tl.transaction_id = t.id) AS net_amount
+       FROM transactions t
+       WHERE t.id = $1 AND t.company_id = $2`,
+      [transaction_id, req.company.id]
+    );
+    if (!tx.rows.length) return res.status(404).json({ error: 'Transaction not found' });
+    const amountDiff = Math.abs(Number(tx.rows[0].net_amount || 0) - Number(line.rows[0].amount || 0));
+    const dateDiffDays = Math.abs(
+      Math.round((new Date(tx.rows[0].entry_date) - new Date(line.rows[0].statement_date)) / 86400000)
+    );
+    const warnings = [];
+    if (amountDiff > 0.01) warnings.push(`Amount mismatch (${amountDiff.toFixed(2)})`);
+    if (dateDiffDays > 3) warnings.push(`Date difference is ${dateDiffDays} day(s)`);
+    if (warnings.length && !force) {
+      return res.status(409).json({ error: 'Pairing has warnings. Retry with force=true.', warnings });
+    }
+    const upd = await query(
+      `UPDATE bank_statement_lines
+       SET is_reconciled = TRUE,
+           reconciled_transaction_id = $1,
+           reconciled_by = $2,
+           reconciled_at = NOW()
+       WHERE id = $3 AND company_id = $4
+       RETURNING *`,
+      [transaction_id, req.user.id, line_id, req.company.id]
+    );
+    return res.json({ line: upd.rows[0], warnings });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed manual pair operation' });
+  }
+});
+
+router.post('/statements/differences/writeoff', async (req, res) => {
+  try {
+    const { line_id, writeoff_account_id, writeoff_date, reason } = req.body || {};
+    if (!line_id || !writeoff_account_id || !writeoff_date || !reason) {
+      return res.status(400).json({ error: 'line_id, writeoff_account_id, writeoff_date, reason are required' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const line = await client.query(
+        `SELECT *
+         FROM bank_statement_lines
+         WHERE id = $1 AND company_id = $2
+         FOR UPDATE`,
+        [line_id, req.company.id]
+      );
+      if (!line.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Statement line not found' });
+      }
+      const l = line.rows[0];
+      const bankAcc = await client.query(
+        `SELECT id, account_id FROM bank_accounts WHERE id = $1 AND company_id = $2`,
+        [l.bank_account_id, req.company.id]
+      );
+      if (!bankAcc.rows.length || !bankAcc.rows[0].account_id) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Bank account GL account is required for write-off' });
+      }
+      const amt = Math.abs(Number(l.amount || 0));
+      const tx = await client.query(
+        `INSERT INTO transactions (company_id, entry_date, description, reference, status, posted_by, posted_at)
+         VALUES ($1,$2,$3,$4,'posted',$5,NOW())
+         RETURNING *`,
+        [
+          req.company.id,
+          writeoff_date,
+          `Bank reconciliation write-off: ${String(reason)}`,
+          `WO-${String(l.id).slice(0, 8)}`,
+          req.user.id,
+        ]
+      );
+      if (Number(l.amount) >= 0) {
+        await client.query(
+          `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit)
+           VALUES ($1,$2,$3,0),($1,$4,0,$3)`,
+          [tx.rows[0].id, writeoff_account_id, amt, bankAcc.rows[0].account_id]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit)
+           VALUES ($1,$2,0,$3),($1,$4,$3,0)`,
+          [tx.rows[0].id, writeoff_account_id, amt, bankAcc.rows[0].account_id]
+        );
+      }
+      const upd = await client.query(
+        `UPDATE bank_statement_lines
+         SET is_reconciled = TRUE,
+             reconciled_transaction_id = $1,
+             reconciled_by = $2,
+             reconciled_at = NOW()
+         WHERE id = $3 AND company_id = $4
+         RETURNING *`,
+        [tx.rows[0].id, req.user.id, line_id, req.company.id]
+      );
+      await client.query('COMMIT');
+      return res.status(201).json({ line: upd.rows[0], writeoff_transaction: tx.rows[0] });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to write off difference' });
+  }
+});
+
+router.get('/statements/fee-interest-suggestions', async (req, res) => {
+  try {
+    const { bank_account_id, from, to } = req.query;
+    if (!bank_account_id || !from || !to) {
+      return res.status(400).json({ error: 'bank_account_id, from, to are required' });
+    }
+    const r = await query(
+      `SELECT id, statement_date, description, reference, amount
+       FROM bank_statement_lines
+       WHERE company_id = $1
+         AND bank_account_id = $2
+         AND statement_date BETWEEN $3::date AND $4::date
+         AND is_reconciled = FALSE
+       ORDER BY statement_date DESC`,
+      [req.company.id, bank_account_id, from, to]
+    );
+    const suggestions = r.rows
+      .filter((x) => {
+        const text = `${x.description || ''} ${x.reference || ''}`.toLowerCase();
+        return text.includes('fee') || text.includes('charge') || text.includes('interest') || text.includes('عمولة') || text.includes('فائدة');
+      })
+      .map((x) => ({
+        ...x,
+        suggestion_type: Number(x.amount) >= 0 ? 'interest_income' : 'bank_fee_expense',
+      }));
+    return res.json({ suggestions });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load fee/interest suggestions' });
+  }
+});
+
+router.get('/settlements/batches', async (req, res) => {
+  try {
+    if (!(await bankSettlementTablesExist())) {
+      return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+    }
+    const { bank_account_id } = req.query;
+    const params = [req.company.id];
+    let sql = `SELECT * FROM bank_settlement_batches WHERE company_id = $1`;
+    if (bank_account_id) {
+      sql += ` AND bank_account_id = $2`;
+      params.push(String(bank_account_id));
+    }
+    sql += ` ORDER BY batch_date DESC, created_at DESC`;
+    const r = await query(sql, params);
+    return res.json({ batches: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list settlement batches' });
+  }
+});
+
+router.post('/settlements/batches', async (req, res) => {
+  try {
+    if (!(await bankSettlementTablesExist())) {
+      return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+    }
+    const { bank_account_id, batch_date, reference, notes, lines = [] } = req.body || {};
+    if (!bank_account_id || !batch_date) {
+      return res.status(400).json({ error: 'bank_account_id and batch_date are required' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const b = await client.query(
+        `INSERT INTO bank_settlement_batches (company_id, bank_account_id, batch_date, reference, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING *`,
+        [req.company.id, bank_account_id, batch_date, reference || null, notes || null, req.user.id]
+      );
+      for (const ln of lines) {
+        if (!ln.statement_line_id) continue;
+        await client.query(
+          `INSERT INTO bank_settlement_batch_lines (company_id, batch_id, statement_line_id, transaction_id, settled_amount, status)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [
+            req.company.id,
+            b.rows[0].id,
+            ln.statement_line_id,
+            ln.transaction_id || null,
+            Math.abs(Number(ln.settled_amount || 0)),
+            ln.status || 'matched',
+          ]
+        );
+      }
+      await client.query('COMMIT');
+      return res.status(201).json({ batch: b.rows[0] });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to create settlement batch' });
+  }
+});
+
+router.get('/reconciliation-locks', async (req, res) => {
+  try {
+    if (!(await bankSettlementTablesExist())) {
+      return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+    }
+    const r = await query(
+      `SELECT *
+       FROM reconciliation_locks
+       WHERE company_id = $1
+       ORDER BY period_end DESC, created_at DESC`,
+      [req.company.id]
+    );
+    return res.json({ locks: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list reconciliation locks' });
+  }
+});
+
+router.post('/reconciliation-locks/submit', async (req, res) => {
+  return requireRole(['owner', 'admin', 'accountant'])(req, res, async () => {
+    try {
+      if (!(await bankSettlementTablesExist())) {
+        return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+      }
+      const { bank_account_id, period_start, period_end, notes } = req.body || {};
+      if (!bank_account_id || !period_start || !period_end) {
+        return res.status(400).json({ error: 'bank_account_id, period_start, period_end are required' });
+      }
+      const up = await query(
+        `INSERT INTO reconciliation_locks (
+           company_id, bank_account_id, period_start, period_end, status, submitted_by, submitted_at, notes
+         )
+         VALUES ($1,$2,$3,$4,'submitted',$5,NOW(),$6)
+         ON CONFLICT (company_id, bank_account_id, period_start, period_end)
+         DO UPDATE SET
+           status = 'submitted',
+           submitted_by = EXCLUDED.submitted_by,
+           submitted_at = NOW(),
+           notes = EXCLUDED.notes,
+           updated_at = NOW()
+         RETURNING *`,
+        [req.company.id, bank_account_id, period_start, period_end, req.user.id, notes || null]
+      );
+      return res.status(201).json({ lock: up.rows[0] });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: 'Failed to submit reconciliation lock' });
+    }
+  });
+});
+
+router.post('/reconciliation-locks/:id/approve', async (req, res) => {
+  return requireRole(['owner', 'admin'])(req, res, async () => {
+    try {
+      if (!(await bankSettlementTablesExist())) {
+        return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+      }
+      const up = await query(
+        `UPDATE reconciliation_locks
+         SET status = 'approved',
+             approved_by = $3,
+             approved_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1 AND company_id = $2
+         RETURNING *`,
+        [req.params.id, req.company.id, req.user.id]
+      );
+      if (!up.rows.length) return res.status(404).json({ error: 'Lock not found' });
+      return res.json({ lock: up.rows[0] });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: 'Failed to approve reconciliation lock' });
+    }
+  });
+});
+
+router.post('/reconciliation-locks/:id/reopen', async (req, res) => {
+  return requireRole(['owner', 'admin'])(req, res, async () => {
+    try {
+      if (!(await bankSettlementTablesExist())) {
+        return res.status(503).json({ error: 'Settlement schema not installed.', hint: bankSettlementSchemaHint() });
+      }
+      const up = await query(
+        `UPDATE reconciliation_locks
+         SET status = 'reopened',
+             reopened_by = $3,
+             reopened_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1 AND company_id = $2
+         RETURNING *`,
+        [req.params.id, req.company.id, req.user.id]
+      );
+      if (!up.rows.length) return res.status(404).json({ error: 'Lock not found' });
+      return res.json({ lock: up.rows[0] });
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ error: 'Failed to reopen reconciliation lock' });
+    }
+  });
 });
 
 export default router;

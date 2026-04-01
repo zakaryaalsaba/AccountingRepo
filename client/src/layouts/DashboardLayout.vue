@@ -4,6 +4,7 @@ import { useRouter, useRoute, RouterLink, RouterView } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuthStore } from '@/stores/auth';
 import { useCompanyStore } from '@/stores/company';
+import { useFiscalStore } from '@/stores/fiscal';
 import NavIcon from '@/components/NavIcon.vue';
 
 const { t, locale } = useI18n();
@@ -11,6 +12,7 @@ const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
 const company = useCompanyStore();
+const fiscal = useFiscalStore();
 
 const mobileNavOpen = ref(false);
 let desktopMq = null;
@@ -96,6 +98,7 @@ function closeMobileNav() {
 
 onMounted(async () => {
   await company.loadCompanies();
+  await fiscal.loadFiscalYears(company.currentCompanyId);
   if (auth.token && !auth.user) await auth.fetchMe();
 
   if (typeof window !== 'undefined') {
@@ -116,6 +119,13 @@ watch(
   () => route.fullPath,
   () => {
     closeMobileNav();
+  }
+);
+
+watch(
+  () => company.currentCompanyId,
+  async (id) => {
+    await fiscal.loadFiscalYears(id);
   }
 );
 
@@ -249,6 +259,19 @@ async function logout() {
                 <option value="">{{ t('company.none') }}</option>
                 <option v-for="c in company.companies" :key="c.id" :value="c.id">
                   {{ c.name }}
+                </option>
+              </select>
+            </label>
+            <label v-if="company.currentCompanyId" class="flex min-w-0 flex-1 flex-col gap-1 sm:max-w-xs">
+              <span class="ui-label !mb-0 !normal-case !tracking-normal text-slate-500">Fiscal year</span>
+              <select
+                :value="fiscal.currentFiscalYearId || ''"
+                class="ui-select max-w-full font-medium text-slate-800"
+                @change="fiscal.setCurrentFiscalYear(company.currentCompanyId, $event.target.value || null)"
+              >
+                <option value="">Auto</option>
+                <option v-for="fy in fiscal.fiscalYears" :key="fy.id" :value="fy.id">
+                  {{ fy.year_code }} {{ fy.is_closed ? '• Closed' : '' }}
                 </option>
               </select>
             </label>

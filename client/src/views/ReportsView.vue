@@ -2,10 +2,12 @@
 import { onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
+import { useFiscalStore } from '@/stores/fiscal';
 import { api } from '@/api/client';
 
 const { t } = useI18n();
 const company = useCompanyStore();
+const fiscal = useFiscalStore();
 
 const from = ref(new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10));
 const to = ref(new Date().toISOString().slice(0, 10));
@@ -26,6 +28,72 @@ const plCompare = ref(null);
 const bsCompare = ref(null);
 const error = ref('');
 const loading = ref(false);
+const reportPresetName = ref('');
+const presetStorageKey = 'reports-presets-v1';
+const reportPresets = ref([]);
+const rowLimits = ref({
+  pl: 80,
+  bs: 80,
+  cf: 80,
+  ap: 80,
+  trial: 80,
+  ledger: 80,
+});
+
+function visibleRows(list, key) {
+  if (!Array.isArray(list)) return [];
+  const lim = Number(rowLimits.value[key] || 80);
+  return list.slice(0, lim);
+}
+
+function canLoadMore(list, key) {
+  return Array.isArray(list) && list.length > Number(rowLimits.value[key] || 80);
+}
+
+function loadMore(key, step = 80) {
+  rowLimits.value[key] = Number(rowLimits.value[key] || 80) + step;
+}
+
+function loadPresets() {
+  try {
+    reportPresets.value = JSON.parse(localStorage.getItem(presetStorageKey) || '[]');
+  } catch {
+    reportPresets.value = [];
+  }
+}
+
+function savePreset() {
+  const name = String(reportPresetName.value || '').trim();
+  if (!name) return;
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name,
+    filters: {
+      from: from.value,
+      to: to.value,
+      asOf: asOf.value,
+      fromB: fromB.value,
+      toB: toB.value,
+      asOfB: asOfB.value,
+      ledgerAccountId: ledgerAccountId.value,
+    },
+  };
+  reportPresets.value = [item, ...reportPresets.value].slice(0, 20);
+  localStorage.setItem(presetStorageKey, JSON.stringify(reportPresets.value));
+  reportPresetName.value = '';
+}
+
+function applyPreset(id) {
+  const p = reportPresets.value.find((x) => x.id === id);
+  if (!p) return;
+  from.value = p.filters.from;
+  to.value = p.filters.to;
+  asOf.value = p.filters.asOf;
+  fromB.value = p.filters.fromB;
+  toB.value = p.filters.toB;
+  asOfB.value = p.filters.asOfB;
+  ledgerAccountId.value = p.filters.ledgerAccountId || ledgerAccountId.value;
+}
 
 async function runPL() {
   if (!company.currentCompanyId) return;
@@ -178,7 +246,18 @@ watch(() => company.currentCompanyId, () => {
   loadAccounts();
 });
 
+watch(
+  () => fiscal.currentFiscalYear,
+  (fy) => {
+    if (!fy) return;
+    from.value = String(fy.start_date).slice(0, 10);
+    to.value = String(fy.end_date).slice(0, 10);
+    asOf.value = String(fy.end_date).slice(0, 10);
+  }
+);
+
 onMounted(loadAccounts);
+onMounted(loadPresets);
 </script>
 
 <template>
@@ -189,6 +268,17 @@ onMounted(loadAccounts);
     </div>
 
     <div class="grid gap-6 lg:grid-cols-2 lg:gap-8">
+      <section class="ui-card ui-card-pad relative overflow-hidden lg:col-span-2">
+        <h2 class="ui-card-title mb-4">Saved report presets</h2>
+        <div class="flex flex-wrap items-end gap-3">
+          <input v-model="reportPresetName" type="text" class="ui-input w-[18rem] max-w-full" placeholder="Preset name" />
+          <button type="button" class="ui-btn-secondary" @click="savePreset">Save current filters</button>
+          <select class="ui-select w-[18rem] max-w-full" @change="applyPreset($event.target.value)">
+            <option value="">Apply preset...</option>
+            <option v-for="p in reportPresets" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+        </div>
+      </section>
       <section class="ui-card ui-card-pad relative overflow-hidden">
         <div class="pointer-events-none absolute -end-8 -top-8 h-28 w-28 rounded-full bg-brand-400/15 blur-2xl" />
         <h2 class="ui-card-title mb-5">{{ t('reports.pl') }}</h2>
@@ -228,7 +318,7 @@ onMounted(loadAccounts);
           </div>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="(row, i) in pl.lines"
+              v-for="(row, i) in visibleRows(pl.lines, 'pl')"
               :key="i"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -236,6 +326,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 font-semibold tabular-nums text-slate-900">{{ Number(row.net).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(pl.lines, 'pl')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('pl')">
+            Load more
+          </button>
         </div>
       </section>
 
@@ -272,7 +365,7 @@ onMounted(loadAccounts);
           </p>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="(row, i) in bs.lines"
+              v-for="(row, i) in visibleRows(bs.lines, 'bs')"
               :key="i"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -284,6 +377,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 font-semibold tabular-nums">{{ Number(row.balance).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(bs.lines, 'bs')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('bs')">
+            Load more
+          </button>
         </div>
       </section>
 
@@ -323,7 +419,7 @@ onMounted(loadAccounts);
           </div>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="row in cf.lines"
+              v-for="row in visibleRows(cf.lines, 'cf')"
               :key="row.transaction_id"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -331,6 +427,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 tabular-nums">{{ Number(row.cash_change).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(cf.lines, 'cf')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('cf')">
+            Load more
+          </button>
         </div>
       </section>
 
@@ -370,7 +469,7 @@ onMounted(loadAccounts);
           </div>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="row in apAging.lines"
+              v-for="row in visibleRows(apAging.lines, 'ap')"
               :key="row.bill_id"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -378,6 +477,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 tabular-nums">{{ Number(row.outstanding).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(apAging.lines, 'ap')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('ap')">
+            Load more
+          </button>
         </div>
       </section>
     </div>
@@ -411,7 +513,7 @@ onMounted(loadAccounts);
           </div>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="row in trial.lines"
+              v-for="row in visibleRows(trial.lines, 'trial')"
               :key="row.id"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -419,6 +521,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 tabular-nums">{{ Number(row.debit_total).toFixed(2) }} / {{ Number(row.credit_total).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(trial.lines, 'trial')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('trial')">
+            Load more
+          </button>
         </div>
       </section>
 
@@ -456,7 +561,7 @@ onMounted(loadAccounts);
           </div>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
             <li
-              v-for="(row, i) in ledger.entries"
+              v-for="(row, i) in visibleRows(ledger.entries, 'ledger')"
               :key="`${row.transaction_id}-${i}`"
               class="flex justify-between gap-2 border-b border-slate-50 pb-2 text-slate-600 last:border-0 last:pb-0"
             >
@@ -464,6 +569,9 @@ onMounted(loadAccounts);
               <span class="shrink-0 tabular-nums">{{ Number(row.running_balance).toFixed(2) }}</span>
             </li>
           </ul>
+          <button v-if="canLoadMore(ledger.entries, 'ledger')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('ledger')">
+            Load more
+          </button>
         </div>
       </section>
     </div>

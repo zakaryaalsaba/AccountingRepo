@@ -4,6 +4,7 @@ let cachedGlColumns = null;
 let cachedPayerColumns = null;
 let cachedNumberingColumns = null;
 let cachedCreditNotesTable = null;
+let cachedProjectColumn = null;
 
 /** Whether `invoices.sale_transaction_id` exists (invoice GL migration applied). */
 export async function invoicesHaveGlColumns() {
@@ -96,9 +97,29 @@ export async function invoicesHaveNumberingColumns() {
   }
 }
 
+export async function invoicesHaveProjectColumn() {
+  if (cachedProjectColumn !== null) return cachedProjectColumn;
+  try {
+    const r = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'invoices'
+         AND column_name = 'project_id'
+       LIMIT 1`
+    );
+    cachedProjectColumn = r.rows.length > 0;
+    return cachedProjectColumn;
+  } catch {
+    cachedProjectColumn = false;
+    return false;
+  }
+}
+
 export function resetInvoiceSchemaCache() {
   cachedGlColumns = null;
   cachedPayerColumns = null;
   cachedNumberingColumns = null;
   cachedCreditNotesTable = null;
+  cachedProjectColumn = null;
 }

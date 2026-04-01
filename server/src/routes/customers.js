@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { customerWorkflowSchemaHint, customerRemindersTableExists } from '../utils/customerWorkflowSchema.js';
+import { statementConfirmationsTableExists, statementSchemaHint } from '../utils/statementSchema.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -128,7 +129,14 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id/statement', async (req, res) => {
   try {
-    const { from, to } = req.query;
+    const {
+      from,
+      to,
+      include_opening = 'true',
+      include_unposted = 'false',
+      branch_id = null,
+      currency = null,
+    } = req.query;
     if (!from || !to) return res.status(400).json({ error: 'from and to are required' });
     const c = await query(
       `SELECT id, name
@@ -144,9 +152,21 @@ router.get('/:id/statement', async (req, res) => {
        WHERE company_id = $1
          AND payer_type::text = 'customer'
          AND payer_id = $2
+         AND ($4::boolean = TRUE OR status <> 'draft'::invoice_status)
          AND invoice_date < $3::date`,
-      [req.company.id, Number(req.params.id), from]
+      [req.company.id, Number(req.params.id), from, include_unposted === 'true']
     );
+    const branchFilter =
+      branch_id
+        ? `AND (
+             sale_transaction_id IN (
+               SELECT id FROM transactions WHERE company_id = $1 AND branch_id = $5
+             )
+             OR payment_transaction_id IN (
+               SELECT id FROM transactions WHERE company_id = $1 AND branch_id = $5
+             )
+           )`
+        : '';
     const inRangeInv = await query(
       `SELECT id, invoice_date::date, customer_name, total_amount, paid_amount,
               GREATEST(total_amount - paid_amount, 0)::numeric(18,2) AS balance
@@ -154,10 +174,12 @@ router.get('/:id/statement', async (req, res) => {
        WHERE company_id = $1
          AND payer_type::text = 'customer'
          AND payer_id = $2
+         AND ($6::boolean = TRUE OR status <> 'draft'::invoice_status)
          AND invoice_date >= $3::date
          AND invoice_date <= $4::date
+         ${branchFilter}
        ORDER BY invoice_date ASC, created_at ASC`,
-      [req.company.id, Number(req.params.id), from, to]
+      [req.company.id, Number(req.params.id), from, to, branch_id, include_unposted === 'true']
     );
     const payments = await query(
       `SELECT p.id AS payment_id,
@@ -172,34 +194,154 @@ router.get('/:id/statement', async (req, res) => {
        LEFT JOIN invoices i
          ON i.id = pa.invoice_id
          AND i.company_id = p.company_id
+       LEFT JOIN transactions pt ON pt.id = p.payment_transaction_id AND pt.company_id = p.company_id
        WHERE p.company_id = $1
          AND p.payment_date::date >= $2::date
          AND p.payment_date::date <= $3::date
          AND (i.payer_type::text = 'customer' AND i.payer_id = $4)
+         AND ($5::uuid IS NULL OR pt.branch_id = $5)
        GROUP BY p.id
        ORDER BY p.payment_date ASC, p.created_at ASC`,
-      [req.company.id, from, to, Number(req.params.id)]
+      [req.company.id, from, to, Number(req.params.id), branch_id]
     );
 
-    const opening_balance = Number(openingInv.rows[0].v);
+    const opening_balance = include_opening === 'true' ? Number(openingInv.rows[0].v) : 0;
     const invoice_additions = inRangeInv.rows.reduce((s, x) => s + Number(x.total_amount), 0);
     const payments_applied = payments.rows.reduce((s, x) => s + Number(x.applied_amount), 0);
     const closing_balance = Math.round((opening_balance + invoice_additions - payments_applied) * 100) / 100;
+    const rows = [
+      ...inRangeInv.rows.map((x) => ({
+        row_type: 'invoice',
+        row_id: x.id,
+        row_date: x.invoice_date,
+        reference: x.id,
+        debit: Number(x.total_amount),
+        credit: 0,
+      })),
+      ...payments.rows.map((x) => ({
+        row_type: 'payment',
+        row_id: x.payment_id,
+        row_date: x.payment_date,
+        reference: x.payment_id,
+        debit: 0,
+        credit: Number(x.applied_amount),
+      })),
+    ].sort((a, b) => String(a.row_date).localeCompare(String(b.row_date)));
+    let running = opening_balance;
+    const detailed_rows = rows.map((r) => {
+      running = Math.round((running + Number(r.debit) - Number(r.credit)) * 100) / 100;
+      return { ...r, running_balance: running };
+    });
 
     return res.json({
       customer: c.rows[0],
       from,
       to,
+      filters: {
+        include_opening: include_opening === 'true',
+        include_unposted: include_unposted === 'true',
+        branch_id,
+        currency,
+      },
       opening_balance,
       invoice_additions: Math.round(invoice_additions * 100) / 100,
       payments_applied: Math.round(payments_applied * 100) / 100,
       closing_balance,
       invoices: inRangeInv.rows,
       payments: payments.rows,
+      detailed_rows,
+      note:
+        currency ? 'currency filter is accepted for workflow parity; current AR statement rows are base-currency amounts.' : null,
     });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to build customer statement' });
+  }
+});
+
+router.get('/:id/statement/drilldown', async (req, res) => {
+  try {
+    const { row_type, row_id } = req.query;
+    if (!row_type || !row_id) return res.status(400).json({ error: 'row_type and row_id are required' });
+    if (row_type === 'invoice') {
+      const r = await query(
+        `SELECT *
+         FROM invoices
+         WHERE id = $1 AND company_id = $2
+           AND payer_type::text = 'customer'
+           AND payer_id = $3`,
+        [row_id, req.company.id, Number(req.params.id)]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Invoice row not found' });
+      return res.json({ row_type, details: r.rows[0] });
+    }
+    if (row_type === 'payment') {
+      const r = await query(
+        `SELECT p.*
+         FROM payments p
+         JOIN payment_allocations pa ON pa.payment_id = p.id AND pa.company_id = p.company_id
+         JOIN invoices i ON i.id = pa.invoice_id AND i.company_id = p.company_id
+         WHERE p.id = $1
+           AND p.company_id = $2
+           AND i.payer_type::text = 'customer'
+           AND i.payer_id = $3
+         LIMIT 1`,
+        [row_id, req.company.id, Number(req.params.id)]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Payment row not found' });
+      return res.json({ row_type, details: r.rows[0] });
+    }
+    return res.status(400).json({ error: 'row_type must be invoice|payment' });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load statement drilldown' });
+  }
+});
+
+router.get('/:id/statement-confirmations', async (req, res) => {
+  try {
+    if (!(await statementConfirmationsTableExists())) {
+      return res.status(503).json({ error: 'Statement confirmation schema not installed.', hint: statementSchemaHint() });
+    }
+    const r = await query(
+      `SELECT *
+       FROM statement_confirmations
+       WHERE company_id = $1
+         AND party_type = 'customer'::statement_party_type
+         AND party_id = $2
+       ORDER BY period_to DESC, created_at DESC`,
+      [req.company.id, String(req.params.id)]
+    );
+    return res.json({ confirmations: r.rows });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to list statement confirmations' });
+  }
+});
+
+router.post('/:id/statement-confirmations', async (req, res) => {
+  try {
+    if (!(await statementConfirmationsTableExists())) {
+      return res.status(503).json({ error: 'Statement confirmation schema not installed.', hint: statementSchemaHint() });
+    }
+    const { period_from, period_to, status = 'sent', notes = null } = req.body || {};
+    if (!period_from || !period_to) return res.status(400).json({ error: 'period_from and period_to are required' });
+    const ins = await query(
+      `INSERT INTO statement_confirmations (
+         company_id, party_type, party_id, period_from, period_to, status, notes, created_by, updated_by,
+         acknowledged_at, disputed_at
+       )
+       VALUES ($1,'customer',$2,$3,$4,$5::statement_confirmation_status,$6,$7,$7,
+         CASE WHEN $5 = 'acknowledged' THEN NOW() ELSE NULL END,
+         CASE WHEN $5 = 'disputed' THEN NOW() ELSE NULL END
+       )
+       RETURNING *`,
+      [req.company.id, String(req.params.id), period_from, period_to, status, notes, req.user.id]
+    );
+    return res.status(201).json({ confirmation: ins.rows[0] });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to create statement confirmation' });
   }
 });
 
