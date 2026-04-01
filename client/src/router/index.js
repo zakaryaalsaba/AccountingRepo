@@ -19,6 +19,12 @@ const router = createRouter({
       meta: { guest: true },
     },
     {
+      path: '/sign/:token',
+      name: 'esign-sign',
+      component: () => import('@/views/documents/PublicSignView.vue'),
+      meta: { public: true },
+    },
+    {
       path: '/',
       component: () => import('@/layouts/DashboardLayout.vue'),
       meta: { requiresAuth: true },
@@ -179,6 +185,24 @@ const router = createRouter({
           component: () => import('@/views/clinical/ClinicalInsuranceView.vue'),
           meta: { requiresCompany: true, module: 'clinical' },
         },
+        {
+          path: 'documents/upload',
+          name: 'document-upload',
+          component: () => import('@/views/documents/DocumentUploadView.vue'),
+          meta: { requiresCompany: true, module: 'documents' },
+        },
+        {
+          path: 'documents/:id',
+          name: 'document-detail',
+          component: () => import('@/views/documents/DocumentDetailView.vue'),
+          meta: { requiresCompany: true, module: 'documents' },
+        },
+        {
+          path: 'documents',
+          name: 'documents',
+          component: () => import('@/views/documents/DocumentsDashboardView.vue'),
+          meta: { requiresCompany: true, module: 'documents' },
+        },
       ],
     },
     // Must be last: unknown paths (manual URL, typos, old links)
@@ -203,6 +227,10 @@ router.beforeEach(async (to) => {
     return true;
   }
 
+  if (to.meta.public) {
+    return true;
+  }
+
   const { useCompanyStore } = await import('@/stores/company');
   const company = useCompanyStore();
 
@@ -212,6 +240,7 @@ router.beforeEach(async (to) => {
     if (company.canAccessModule('accounting')) return { name: 'accounts' };
     if (company.canAccessModule('clinical')) return { name: 'clinical-patients' };
     if (company.canAccessModule('staff')) return { name: 'staff-users' };
+    if (company.canAccessModule('documents')) return { name: 'documents' };
     return { name: 'login' };
   };
 

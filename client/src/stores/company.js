@@ -20,7 +20,8 @@ export const useCompanyStore = defineStore('company', () => {
     const role = currentCompanyRole.value;
     if (!role) return false;
     if (role === 'owner' || role === 'admin') return true;
-    if (role === 'accountant') return moduleName === 'accounting';
+    if (role === 'accountant') return moduleName === 'accounting' || moduleName === 'documents';
+    if (role === 'viewer') return moduleName === 'accounting' || moduleName === 'documents';
     if (role === 'doctor' || role === 'receptionist') return moduleName === 'clinical';
     return false;
   }

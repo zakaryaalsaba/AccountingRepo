@@ -9,7 +9,9 @@
     "seed:demo": "node scripts/seedDemoData.mjs",
     "backfill:voucher-refs:dry": "node scripts/backfillVoucherReferences.mjs",
     "backfill:voucher-refs:apply": "APPLY=1 node scripts/backfillVoucherReferences.mjs",
-    "test:integration": "node --test tests/postingWorkflows.test.mjs",
+    "test": "node --test tests/esignSecurity.test.mjs tests/esignStatusMachine.test.mjs tests/esignPermissionsAndSigningOrder.test.mjs tests/postingWorkflows.test.mjs tests/multiCompanyIsolation.test.mjs tests/esignFlow.integration.test.mjs",
+    "test:integration": "node --test tests/postingWorkflows.test.mjs tests/multiCompanyIsolation.test.mjs tests/esignFlow.integration.test.mjs",
+    "test:esign:unit": "node --test tests/esignSecurity.test.mjs tests/esignStatusMachine.test.mjs tests/esignPermissionsAndSigningOrder.test.mjs",
     "test:smoke": "node tests/smoke.e2e.mjs",
     "test:isolation": "node --test tests/multiCompanyIsolation.test.mjs"
   },
@@ -19,6 +21,7 @@
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.0",
     "pg": "^8.13.0"
   }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/zakaryaalsaba/Desktop/AccountingRepo"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_URL_LOCAL="${DB_URL_LOCAL:-postgresql://postgres:postgres@localhost:5433/accounting_saas}"
 
 echo "==> Starting local Postgres (docker compose)"
@@ -25,15 +25,15 @@ npm --prefix "$ROOT_DIR/client" install
 echo "==> Building client"
 npm --prefix "$ROOT_DIR/client" run build
 
-cat <<'EOF'
+cat <<EOF
 
 Done.
 Next:
-1) API: npm --prefix "/Users/zakaryaalsaba/Desktop/AccountingRepo/server" run dev
-2) UI:  npm --prefix "/Users/zakaryaalsaba/Desktop/AccountingRepo/client" run dev
+1) API: npm --prefix "$ROOT_DIR/server" run dev
+2) UI:  npm --prefix "$ROOT_DIR/client" run dev
 
 Optional:
 - Seed demo data:
-  SEED_COMPANY_ID=<company-uuid> npm --prefix "/Users/zakaryaalsaba/Desktop/AccountingRepo/server" run seed:demo
+  SEED_COMPANY_ID=<company-uuid> npm --prefix "$ROOT_DIR/server" run seed:demo
 
 EOF

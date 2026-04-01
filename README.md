@@ -77,6 +77,10 @@ Health: `GET /health`
 | Reports | `/api/reports/profit-loss` | Query: `from`, `to` |
 | Reports | `/api/reports/balance-sheet` | Query: `as_of` |
 
+### Document signing (e-sign)
+
+Optional module: PDF upload, send for signature, public signing links. **Env vars, migration order, API reference, and signing URL format:** [docs/documents-module.md](docs/documents-module.md).
+
 ## 3. Frontend
 
 ```bash
@@ -102,7 +106,9 @@ npm run build
 ## Project layout
 
 ```
-database/schema.sql    # PostgreSQL DDL
-server/src             # Express modules (auth, companies, accounts, …)
-client/src             # Vue app, Pinia, i18n (ar default, en secondary)
+database/schema.sql       # PostgreSQL DDL
+database/migrations/      # Incremental SQL (apply in numeric order)
+docs/documents-module.md  # E-sign: env, APIs, migrations runbook
+server/src                # Express modules (auth, companies, accounts, …)
+client/src                # Vue app, Pinia, i18n (ar default, en secondary)
 ```

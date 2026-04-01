@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/zakaryaalsaba/Desktop/AccountingRepo"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "ERROR: DATABASE_URL is not set."

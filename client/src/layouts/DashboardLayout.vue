@@ -55,6 +55,14 @@ const navGroups = computed(() => [
     ],
   },
   {
+    title: t('nav.sectionDocuments'),
+    module: 'documents',
+    items: [
+      { to: '/documents', label: t('documents.navList'), icon: 'doc', needsCompany: true, exact: true },
+      { to: '/documents/upload', label: t('documents.navUpload'), icon: 'pen', needsCompany: true },
+    ],
+  },
+  {
     title: t('nav.sectionClinical'),
     module: 'clinical',
     items: [

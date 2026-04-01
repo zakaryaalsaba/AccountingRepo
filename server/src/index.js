@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { getEsignStorageConfig } from './modules/documents/storage/index.js';
+import documentsModule from './modules/documents/index.js';
+import publicSignRoutes from './modules/documents/routes/publicSign.js';
 
 import authRoutes from './routes/auth.js';
 import companiesRoutes from './routes/companies.js';
@@ -43,7 +46,15 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
 app.use(cors({ origin: true, credentials: true }));
+
+const esignSignJsonLimit = process.env.ESIGN_SIGN_JSON_LIMIT || '15mb';
+app.use('/api/sign', express.json({ limit: esignSignJsonLimit }), publicSignRoutes);
+app.use('/sign', express.json({ limit: esignSignJsonLimit }), publicSignRoutes);
+
 app.use(express.json({ limit: '1mb' }));
+
+const esignPublicPath = process.env.ESIGN_PUBLIC_URL_PATH || '/files/esign';
+app.use(esignPublicPath, express.static(getEsignStorageConfig().uploadRoot));
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'accounting-saas-api' });
@@ -83,6 +94,7 @@ app.use('/api/projects', projectsRoutes);
 app.use('/api/service-invoices', serviceInvoicesRoutes);
 app.use('/api', clinicalRoutes);
 app.use('/api', staffRoutes);
+app.use('/api', documentsModule);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

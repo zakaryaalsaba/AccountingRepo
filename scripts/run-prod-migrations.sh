@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/zakaryaalsaba/Desktop/AccountingRepo"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "ERROR: DATABASE_URL is not set."
@@ -52,10 +52,10 @@ else
   fi
 fi
 
-echo "==> Applying migrations to production database"
-for f in "$ROOT_DIR"/database/migrations/*.sql; do
+echo "==> Applying migrations to production database (sorted by filename)"
+for f in $(find "$ROOT_DIR/database/migrations" -maxdepth 1 -name '*.sql' | LC_ALL=C sort); do
   echo "Applying: $f"
-  psql "$DATABASE_URL" -f "$f"
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
 done
 
 echo "==> Quick verification"

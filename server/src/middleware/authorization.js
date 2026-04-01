@@ -12,10 +12,14 @@ const DEFAULT_ROLE_PERMISSIONS = {
     'periods.reopen': false,
     'periods.year_close': false,
     'audit.approval.decide': false,
+    'documents.read': true,
+    'documents.manage': true,
   },
   viewer: {
     'transactions.read': true,
     'reports.read': true,
+    'documents.read': true,
+    'documents.manage': false,
   },
 };
 

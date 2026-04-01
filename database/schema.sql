@@ -1053,3 +1053,86 @@ CREATE TABLE patient_insurances (
 CREATE INDEX idx_patient_insurances_company ON patient_insurances (company_id);
 CREATE INDEX idx_patient_insurances_patient ON patient_insurances (patient_id);
 CREATE INDEX idx_patient_insurances_provider ON patient_insurances (provider_id);
+
+-- ---------------------------------------------------------------------------
+-- E-sign / document signing (subsystem; all rows scoped by company_id)
+-- ---------------------------------------------------------------------------
+CREATE TYPE esign_document_status AS ENUM ('DRAFT', 'SENT', 'SIGNED');
+CREATE TYPE esign_recipient_status AS ENUM ('PENDING', 'SIGNED');
+
+CREATE TABLE esign_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  file_url TEXT NOT NULL,
+  owner_id UUID NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
+  status esign_document_status NOT NULL DEFAULT 'DRAFT',
+  placements_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_esign_documents_company ON esign_documents (company_id);
+CREATE INDEX idx_esign_documents_company_status ON esign_documents (company_id, status);
+CREATE INDEX idx_esign_documents_owner ON esign_documents (owner_id);
+
+CREATE TABLE esign_recipients (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  document_id UUID NOT NULL REFERENCES esign_documents (id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL,
+  signing_order INTEGER NOT NULL DEFAULT 1 CHECK (signing_order >= 1),
+  status esign_recipient_status NOT NULL DEFAULT 'PENDING',
+  sign_token_hash VARCHAR(128),
+  sign_token_expires_at TIMESTAMPTZ,
+  signed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (document_id, email)
+);
+
+CREATE UNIQUE INDEX idx_esign_recipients_sign_token_hash ON esign_recipients (sign_token_hash)
+  WHERE sign_token_hash IS NOT NULL;
+
+CREATE INDEX idx_esign_recipients_company ON esign_recipients (company_id);
+CREATE INDEX idx_esign_recipients_document ON esign_recipients (company_id, document_id);
+CREATE INDEX idx_esign_recipients_document_order ON esign_recipients (document_id, signing_order);
+
+CREATE TABLE esign_signatures (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  document_id UUID NOT NULL REFERENCES esign_documents (id) ON DELETE CASCADE,
+  recipient_id UUID NOT NULL REFERENCES esign_recipients (id) ON DELETE CASCADE,
+  page INTEGER NOT NULL CHECK (page >= 1),
+  x NUMERIC(12, 4) NOT NULL,
+  y NUMERIC(12, 4) NOT NULL,
+  signature_data TEXT NOT NULL,
+  signed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_esign_signatures_company ON esign_signatures (company_id);
+CREATE INDEX idx_esign_signatures_document ON esign_signatures (company_id, document_id);
+CREATE INDEX idx_esign_signatures_recipient ON esign_signatures (recipient_id);
+
+CREATE TABLE esign_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies (id) ON DELETE CASCADE,
+  document_id UUID NOT NULL REFERENCES esign_documents (id) ON DELETE CASCADE,
+  action VARCHAR(120) NOT NULL,
+  actor VARCHAR(255) NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_esign_audit_logs_company ON esign_audit_logs (company_id);
+CREATE INDEX idx_esign_audit_logs_document ON esign_audit_logs (company_id, document_id);
+CREATE INDEX idx_esign_audit_logs_created ON esign_audit_logs (company_id, created_at DESC);
+
+-- E-sign integration hooks (future-ready): nullable FKs to esign_documents (see migration 039).
+ALTER TABLE invoices
+  ADD COLUMN IF NOT EXISTS esign_document_id UUID REFERENCES esign_documents (id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_invoices_esign_document ON invoices (esign_document_id) WHERE esign_document_id IS NOT NULL;
+
+ALTER TABLE medical_records
+  ADD COLUMN IF NOT EXISTS esign_document_id UUID REFERENCES esign_documents (id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_medical_records_esign_document ON medical_records (esign_document_id) WHERE esign_document_id IS NOT NULL;
