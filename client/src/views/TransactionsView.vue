@@ -137,7 +137,7 @@ function suggestCounterpartLine() {
     line.debit = Math.abs(diff).toFixed(2);
     line.credit = '';
   }
-  if (!line.note) line.note = 'Auto balance suggestion';
+  if (!line.note) line.note = t('txWorkbench.autoBalanceSuggestion');
 
   if (!target) entry.value.lines.push(line);
 }
@@ -158,7 +158,7 @@ function removeAttachment(idx) {
 async function saveAsTemplate() {
   const name = String(templateName.value || '').trim();
   if (!name) {
-    error.value = 'Template name is required';
+    error.value = t('txWorkbench.templateNameRequired');
     return;
   }
   const lines = entry.value.lines
@@ -171,7 +171,7 @@ async function saveAsTemplate() {
     }))
     .filter((l) => l.account_id || l.debit > 0 || l.credit > 0 || l.note);
   if (!lines.length) {
-    error.value = 'Add at least one line before saving template';
+    error.value = t('txWorkbench.lineRequiredForTemplate');
     return;
   }
   try {
@@ -314,7 +314,7 @@ async function submit() {
 }
 
 async function remove(id) {
-  if (!confirm('OK?')) return;
+  if (!confirm(t('txWorkbench.confirmDelete'))) return;
   try {
     await api.delete(`/api/transactions/${id}`);
     await load();
@@ -379,38 +379,38 @@ watch(
     <div class="ui-card ui-card-pad">
       <h2 class="ui-card-title mb-5">{{ t('transactions.new') }}</h2>
       <div class="mb-6 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-        <p class="mb-2 text-sm font-semibold text-slate-700">Frequent templates</p>
+        <p class="mb-2 text-sm font-semibold text-slate-700">{{ t('txWorkbench.frequentTemplates') }}</p>
         <div class="grid gap-2 sm:grid-cols-4">
-          <input v-model="accountQuery" type="text" class="ui-input" placeholder="Search account code/name" />
+          <input v-model="accountQuery" type="text" class="ui-input" :placeholder="t('txWorkbench.searchAccount')" />
           <select v-model="selectedTemplateId" class="ui-select">
-            <option value="">Select template</option>
+            <option value="">{{ t('txWorkbench.selectTemplate') }}</option>
             <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
           </select>
           <button type="button" class="ui-btn-secondary" :disabled="!selectedTemplateId" @click="applyTemplate">
-            Apply
+            {{ t('txWorkbench.apply') }}
           </button>
-          <input v-model="templateName" type="text" class="ui-input" placeholder="Template name" />
+          <input v-model="templateName" type="text" class="ui-input" :placeholder="t('txWorkbench.templateName')" />
           <button type="button" class="ui-btn-secondary" :disabled="!templateName" @click="saveAsTemplate">
-            Save current as template
+            {{ t('txWorkbench.saveAsTemplate') }}
           </button>
         </div>
         <div class="mt-2">
-          <input v-model="templateDescription" type="text" class="ui-input" placeholder="Template description" />
+          <input v-model="templateDescription" type="text" class="ui-input" :placeholder="t('txWorkbench.templateDescription')" />
         </div>
         <ul v-if="templates.length" class="mt-3 space-y-1 text-xs text-slate-600">
           <li v-for="tpl in templates" :key="tpl.id" class="flex items-center justify-between rounded-md bg-white px-2 py-1 ring-1 ring-slate-100">
             <span>{{ tpl.name }}</span>
-            <button type="button" class="ui-btn-danger !px-2 !py-1 text-xs" @click="deleteTemplate(tpl.id)">Delete</button>
+            <button type="button" class="ui-btn-danger !px-2 !py-1 text-xs" @click="deleteTemplate(tpl.id)">{{ t('txWorkbench.delete') }}</button>
           </li>
         </ul>
       </div>
       <div class="mb-6 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-        <p class="mb-2 text-sm font-semibold text-slate-700">Dimension policy</p>
+        <p class="mb-2 text-sm font-semibold text-slate-700">{{ t('txWorkbench.dimensionPolicy') }}</p>
         <div class="grid gap-2 sm:grid-cols-2">
           <select v-model="entry.dimension_policy.mode" class="ui-select">
-            <option value="optional">Optional</option>
-            <option value="required_any">Require any dimension</option>
-            <option value="required_types">Require specific types</option>
+            <option value="optional">{{ t('txWorkbench.optional') }}</option>
+            <option value="required_any">{{ t('txWorkbench.requiredAny') }}</option>
+            <option value="required_types">{{ t('txWorkbench.requiredTypes') }}</option>
           </select>
           <select
             v-model="entry.dimension_policy.required_types"
@@ -418,25 +418,25 @@ watch(
             multiple
             :disabled="entry.dimension_policy.mode !== 'required_types'"
           >
-            <option value="cost_center">cost_center</option>
-            <option value="project">project</option>
-            <option value="department">department</option>
-            <option value="custom">custom</option>
+            <option value="cost_center">{{ t('txWorkbench.dimensionCostCenter') }}</option>
+            <option value="project">{{ t('txWorkbench.dimensionProject') }}</option>
+            <option value="department">{{ t('txWorkbench.dimensionDepartment') }}</option>
+            <option value="custom">{{ t('txWorkbench.dimensionCustom') }}</option>
           </select>
         </div>
       </div>
       <div class="mb-6 grid gap-4 sm:grid-cols-3">
         <div>
-          <label class="ui-label">Document type</label>
+          <label class="ui-label">{{ t('txWorkbench.documentType') }}</label>
           <select v-model="entry.doc_type" class="ui-select">
-            <option value="journal_voucher">Journal voucher</option>
+            <option value="journal_voucher">{{ t('txWorkbench.journalVoucher') }}</option>
           </select>
         </div>
         <div>
-          <label class="ui-label">Status</label>
+          <label class="ui-label">{{ t('txWorkbench.status') }}</label>
           <select v-model="entry.status" class="ui-select">
-            <option value="posted">Posted</option>
-            <option value="draft">Draft</option>
+            <option value="posted">{{ t('txWorkbench.posted') }}</option>
+            <option value="draft">{{ t('txWorkbench.draft') }}</option>
           </select>
         </div>
         <div>
@@ -452,7 +452,7 @@ watch(
           <input v-model="entry.reference" type="text" class="ui-input" />
         </div>
         <div class="sm:col-span-3">
-          <label class="ui-label">Notes</label>
+          <label class="ui-label">{{ t('txWorkbench.notes') }}</label>
           <textarea v-model="entry.notes" rows="2" class="ui-input"></textarea>
         </div>
       </div>
@@ -464,9 +464,9 @@ watch(
               <th class="px-2 py-2 text-start">{{ t('transactions.account') }}</th>
               <th class="px-2 py-2 text-start">{{ t('transactions.debit') }}</th>
               <th class="px-2 py-2 text-start">{{ t('transactions.credit') }}</th>
-              <th class="px-2 py-2 text-start">Note</th>
-              <th class="px-2 py-2 text-start">Dimensions</th>
-              <th class="px-2 py-2 text-start">Actions</th>
+              <th class="px-2 py-2 text-start">{{ t('txWorkbench.note') }}</th>
+              <th class="px-2 py-2 text-start">{{ t('txWorkbench.dimensions') }}</th>
+              <th class="px-2 py-2 text-start">{{ t('txWorkbench.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -509,7 +509,7 @@ watch(
                   v-model="line.note"
                   type="text"
                   class="ui-input !bg-white"
-                  placeholder="Note"
+                  :placeholder="t('txWorkbench.note')"
                   data-entry-cell="1"
                   @keydown.enter.prevent="onEntryCellEnter"
                 />
@@ -520,16 +520,16 @@ watch(
                 </select>
               </td>
               <td class="px-2 py-1.5 whitespace-nowrap">
-                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="insertLineAt(idx)">+Before</button>
-                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs ms-1" @click="insertLineAt(idx + 1)">+After</button>
-                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs ms-1" @click="duplicateLine(idx)">Copy</button>
+                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="insertLineAt(idx)">{{ t('txWorkbench.before') }}</button>
+                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs ms-1" @click="insertLineAt(idx + 1)">{{ t('txWorkbench.after') }}</button>
+                <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs ms-1" @click="duplicateLine(idx)">{{ t('txWorkbench.copy') }}</button>
                 <button
                   type="button"
                   class="ui-btn-danger !px-2 !py-1 text-xs ms-1"
                   :disabled="entry.lines.length <= 2"
                   @click="removeLine(idx)"
                 >
-                  Remove
+                  {{ t('txWorkbench.remove') }}
                 </button>
               </td>
             </tr>
@@ -538,17 +538,17 @@ watch(
       </div>
       <div class="mt-5 rounded-xl border border-slate-100 bg-slate-50/50 p-3">
         <div class="mb-2 flex items-center justify-between">
-          <p class="text-sm font-semibold text-slate-700">Attachments</p>
-          <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="addAttachment">+ Add</button>
+          <p class="text-sm font-semibold text-slate-700">{{ t('txWorkbench.attachments') }}</p>
+          <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="addAttachment">{{ t('txWorkbench.add') }}</button>
         </div>
-        <div v-if="!entry.attachments.length" class="text-xs text-slate-500">No attachments</div>
+        <div v-if="!entry.attachments.length" class="text-xs text-slate-500">{{ t('txWorkbench.noAttachments') }}</div>
         <div v-for="(a, i) in entry.attachments" :key="i" class="mb-2 grid gap-2 sm:grid-cols-4">
-          <input v-model="a.file_name" type="text" class="ui-input" placeholder="File name" />
+          <input v-model="a.file_name" type="text" class="ui-input" :placeholder="t('txWorkbench.fileName')" />
           <input v-model="a.file_url" type="url" class="ui-input" placeholder="https://..." />
           <input v-model="a.mime_type" type="text" class="ui-input" placeholder="mime/type" />
           <div class="flex gap-2">
             <input v-model="a.file_size_bytes" type="number" min="0" class="ui-input" placeholder="bytes" />
-            <button type="button" class="ui-btn-danger !px-2 !py-1 text-xs" @click="removeAttachment(i)">X</button>
+            <button type="button" class="ui-btn-danger !px-2 !py-1 text-xs" @click="removeAttachment(i)">{{ t('txWorkbench.delete') }}</button>
           </div>
         </div>
       </div>
@@ -560,7 +560,7 @@ watch(
           :disabled="Math.abs(balanceDiff) < 0.005"
           @click="suggestCounterpartLine"
         >
-          Auto-balance
+          {{ t('txWorkbench.autoBalance') }}
         </button>
         <span class="text-sm font-medium tabular-nums text-slate-600">
           {{ t('transactions.debit') }}: {{ totalDebit.toFixed(2) }} · {{ t('transactions.credit') }}:
@@ -569,15 +569,15 @@ watch(
         <span v-if="balanced && totalDebit > 0" class="ui-badge-emerald text-[11px]">✓</span>
         <span v-if="!balanced" class="ui-badge-amber max-w-full text-[11px] leading-snug">{{ t('transactions.balanced') }}</span>
         <span class="ui-badge-slate text-[11px]">
-          Autosave:
+          {{ t('txWorkbench.autosave') }}:
           {{
             autosaveState === 'saved'
-              ? 'saved'
+              ? t('txWorkbench.saved')
               : autosaveState === 'restored'
-                ? 'restored'
+                ? t('txWorkbench.restored')
                 : autosaveState === 'error'
-                  ? 'error'
-                  : 'idle'
+                  ? t('txWorkbench.error')
+                  : t('txWorkbench.idle')
           }}
         </span>
       </div>
@@ -585,16 +585,16 @@ watch(
         {{ error }}
       </p>
       <button type="button" class="ui-btn-primary mt-5" :disabled="!balanced" @click="submit">
-        {{ editingTransactionId ? 'Update draft' : t('transactions.submit') }}
+        {{ editingTransactionId ? t('txWorkbench.updateDraft') : t('transactions.submit') }}
       </button>
       <div class="mt-6 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-        <p class="mb-2 text-sm font-semibold text-slate-700">CSV import (dry run)</p>
+        <p class="mb-2 text-sm font-semibold text-slate-700">{{ t('txWorkbench.csvDryRun') }}</p>
         <textarea v-model="csvText" rows="4" class="ui-input font-mono text-xs"></textarea>
-        <button type="button" class="ui-btn-secondary mt-2" @click="runCsvDryRun">Run dry run</button>
+        <button type="button" class="ui-btn-secondary mt-2" @click="runCsvDryRun">{{ t('txWorkbench.runDryRun') }}</button>
         <div v-if="csvDryRun" class="mt-2 text-xs text-slate-600">
-          <p>Balanced: {{ csvDryRun.totals?.balanced ? 'Yes' : 'No' }}</p>
-          <p>Rows parsed: {{ csvDryRun.parsed_lines?.length || 0 }}</p>
-          <p>Errors: {{ csvDryRun.errors?.length || 0 }}</p>
+          <p>{{ t('txWorkbench.balancedLabel') }}: {{ csvDryRun.totals?.balanced ? t('txWorkbench.yes') : t('txWorkbench.no') }}</p>
+          <p>{{ t('txWorkbench.rowsParsed') }}: {{ csvDryRun.parsed_lines?.length || 0 }}</p>
+          <p>{{ t('txWorkbench.errors') }}: {{ csvDryRun.errors?.length || 0 }}</p>
         </div>
       </div>
     </div>
@@ -606,7 +606,7 @@ watch(
             <th>{{ t('transactions.date') }}</th>
             <th>{{ t('transactions.description') }}</th>
             <th>{{ t('transactions.lines') }}</th>
-            <th>Status</th>
+            <th>{{ t('txWorkbench.status') }}</th>
             <th>{{ t('common.actions') }}</th>
           </tr>
         </thead>
@@ -642,7 +642,7 @@ watch(
                 class="ui-btn-secondary !px-2 !py-1.5 text-sm ms-1"
                 @click="editDraft(tx)"
               >
-                Edit draft
+                {{ t('txWorkbench.editDraft') }}
               </button>
             </td>
           </tr>

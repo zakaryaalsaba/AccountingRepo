@@ -144,7 +144,7 @@ async function logout() {
       v-if="mobileNavOpen"
       type="button"
       class="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm md:hidden"
-      aria-label="Close menu"
+      :aria-label="t('layout.closeMenu')"
       @click="closeMobileNav"
     />
 
@@ -240,7 +240,7 @@ async function logout() {
           <button
             type="button"
             class="ui-btn-secondary -ms-1 border-slate-200 px-2.5 py-2 md:hidden"
-            aria-label="Menu"
+            :aria-label="t('layout.menu')"
             @click="mobileNavOpen = true"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -263,15 +263,15 @@ async function logout() {
               </select>
             </label>
             <label v-if="company.currentCompanyId" class="flex min-w-0 flex-1 flex-col gap-1 sm:max-w-xs">
-              <span class="ui-label !mb-0 !normal-case !tracking-normal text-slate-500">Fiscal year</span>
+              <span class="ui-label !mb-0 !normal-case !tracking-normal text-slate-500">{{ t('layout.fiscalYear') }}</span>
               <select
                 :value="fiscal.currentFiscalYearId || ''"
                 class="ui-select max-w-full font-medium text-slate-800"
                 @change="fiscal.setCurrentFiscalYear(company.currentCompanyId, $event.target.value || null)"
               >
-                <option value="">Auto</option>
+                <option value="">{{ t('layout.auto') }}</option>
                 <option v-for="fy in fiscal.fiscalYears" :key="fy.id" :value="fy.id">
-                  {{ fy.year_code }} {{ fy.is_closed ? '• Closed' : '' }}
+                  {{ fy.year_code }} {{ fy.is_closed ? `• ${t('layout.closed')}` : '' }}
                 </option>
               </select>
             </label>
@@ -289,7 +289,7 @@ async function logout() {
               class="ui-btn-secondary border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
               @click="toggleLocale"
             >
-              {{ locale === 'ar' ? 'العربية' : 'English' }}
+              {{ locale === 'ar' ? t('layout.langArabic') : t('layout.langEnglish') }}
             </button>
           </div>
         </div>

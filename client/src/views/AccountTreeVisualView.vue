@@ -1,8 +1,10 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
 
+const { t } = useI18n();
 const company = useCompanyStore();
 const tree = ref([]);
 const error = ref('');
@@ -14,7 +16,7 @@ async function load() {
     const r = await api.get('/api/accounts/tree');
     tree.value = r.data.tree || [];
   } catch (e) {
-    error.value = e.response?.data?.error || 'Failed to load account tree';
+    error.value = e.response?.data?.error || t('accountTreeView.loadFailed');
   }
 }
 
@@ -25,8 +27,8 @@ watch(() => company.currentCompanyId, load);
 <template>
   <div class="ui-page">
     <div class="ui-page-head">
-      <h1 class="ui-page-title">Account tree</h1>
-      <p class="ui-page-desc">Visual hierarchy for chart of accounts.</p>
+      <h1 class="ui-page-title">{{ t('accountTreeView.title') }}</h1>
+      <p class="ui-page-desc">{{ t('accountTreeView.subtitle') }}</p>
     </div>
     <section class="ui-card ui-card-pad">
       <ul class="space-y-2">

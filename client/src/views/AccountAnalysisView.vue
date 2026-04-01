@@ -1,8 +1,10 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
 
+const { t } = useI18n();
 const company = useCompanyStore();
 const accounts = ref([]);
 const accountId = ref('');
@@ -25,7 +27,7 @@ async function run() {
     const r = await api.get(`/api/reports/account-ledger/${accountId.value}`, { params: { from: from.value, to: to.value } });
     ledger.value = r.data;
   } catch (e) {
-    error.value = e.response?.data?.error || 'Failed to load account analysis';
+    error.value = e.response?.data?.error || t('analysisView.loadFailed');
   }
 }
 
@@ -43,8 +45,8 @@ watch(() => company.currentCompanyId, async () => {
 <template>
   <div class="ui-page">
     <div class="ui-page-head">
-      <h1 class="ui-page-title">Account analysis</h1>
-      <p class="ui-page-desc">Cash/bank/customer/vendor ledgers via account-level drilldown.</p>
+      <h1 class="ui-page-title">{{ t('analysisView.title') }}</h1>
+      <p class="ui-page-desc">{{ t('analysisView.subtitle') }}</p>
     </div>
     <section class="ui-card ui-card-pad">
       <div class="mb-4 grid gap-3 md:grid-cols-4">
@@ -53,10 +55,10 @@ watch(() => company.currentCompanyId, async () => {
         </select>
         <input v-model="from" type="date" class="ui-input" />
         <input v-model="to" type="date" class="ui-input" />
-        <button class="ui-btn-primary" @click="run">Run</button>
+        <button class="ui-btn-primary" @click="run">{{ t('analysisView.run') }}</button>
       </div>
       <div v-if="ledger" class="space-y-3 text-sm">
-        <p>Opening: <b>{{ Number(ledger.opening_balance).toFixed(2) }}</b> · Closing: <b>{{ Number(ledger.closing_balance).toFixed(2) }}</b></p>
+        <p>{{ t('analysisView.opening') }}: <b>{{ Number(ledger.opening_balance).toFixed(2) }}</b> · {{ t('analysisView.closing') }}: <b>{{ Number(ledger.closing_balance).toFixed(2) }}</b></p>
         <ul class="max-h-[30rem] space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3">
           <li v-for="(e, i) in ledger.entries" :key="`${e.transaction_id}-${i}`" class="flex justify-between border-b border-slate-50 pb-2 text-slate-700 last:border-0">
             <span>{{ e.entry_date }} — {{ e.description || '—' }}</span>

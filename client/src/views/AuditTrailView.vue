@@ -1,8 +1,10 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
 
+const { t } = useI18n();
 const company = useCompanyStore();
 const events = ref([]);
 const approvals = ref([]);
@@ -21,7 +23,7 @@ async function load() {
     events.value = e.data.events || [];
     approvals.value = a.data.approvals || [];
   } catch (err) {
-    error.value = err.response?.data?.error || 'Failed to load audit trail';
+    error.value = err.response?.data?.error || t('auditView.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -34,13 +36,13 @@ watch(() => company.currentCompanyId, load);
 <template>
   <div class="ui-page">
     <div class="ui-page-head">
-      <h1 class="ui-page-title">Audit trail</h1>
-      <p class="ui-page-desc">Immutable event log and journal approvals.</p>
+      <h1 class="ui-page-title">{{ t('auditView.title') }}</h1>
+      <p class="ui-page-desc">{{ t('auditView.subtitle') }}</p>
     </div>
 
     <div class="grid gap-6 lg:grid-cols-2">
       <section class="ui-card ui-card-pad">
-        <h2 class="ui-card-title mb-4">Recent events</h2>
+        <h2 class="ui-card-title mb-4">{{ t('auditView.recentEvents') }}</h2>
         <ul class="max-h-[28rem] space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3">
           <li v-for="ev in events" :key="ev.id" class="rounded-lg border border-slate-100 p-3 text-sm">
             <p class="font-semibold text-slate-900">{{ ev.event_type }}</p>
@@ -51,7 +53,7 @@ watch(() => company.currentCompanyId, load);
       </section>
 
       <section class="ui-card ui-card-pad">
-        <h2 class="ui-card-title mb-4">Journal approvals</h2>
+        <h2 class="ui-card-title mb-4">{{ t('auditView.journalApprovals') }}</h2>
         <ul class="max-h-[28rem] space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3">
           <li v-for="a in approvals" :key="a.id" class="rounded-lg border border-slate-100 p-3 text-sm">
             <p class="font-semibold text-slate-900">{{ a.status }} · {{ a.entry_date }}</p>
@@ -62,7 +64,7 @@ watch(() => company.currentCompanyId, load);
       </section>
     </div>
 
-    <p v-if="loading" class="mt-4 text-sm text-slate-500">Loading...</p>
+    <p v-if="loading" class="mt-4 text-sm text-slate-500">{{ t('common.loading') }}</p>
     <p v-if="error" class="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-100">{{ error }}</p>
   </div>
 </template>

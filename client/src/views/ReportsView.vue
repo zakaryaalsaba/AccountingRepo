@@ -269,12 +269,12 @@ onMounted(loadPresets);
 
     <div class="grid gap-6 lg:grid-cols-2 lg:gap-8">
       <section class="ui-card ui-card-pad relative overflow-hidden lg:col-span-2">
-        <h2 class="ui-card-title mb-4">Saved report presets</h2>
+        <h2 class="ui-card-title mb-4">{{ t('reports.savedPresets') }}</h2>
         <div class="flex flex-wrap items-end gap-3">
-          <input v-model="reportPresetName" type="text" class="ui-input w-[18rem] max-w-full" placeholder="Preset name" />
-          <button type="button" class="ui-btn-secondary" @click="savePreset">Save current filters</button>
+          <input v-model="reportPresetName" type="text" class="ui-input w-[18rem] max-w-full" :placeholder="t('reports.presetName')" />
+          <button type="button" class="ui-btn-secondary" @click="savePreset">{{ t('reports.saveCurrentFilters') }}</button>
           <select class="ui-select w-[18rem] max-w-full" @change="applyPreset($event.target.value)">
-            <option value="">Apply preset...</option>
+            <option value="">{{ t('reports.applyPreset') }}</option>
             <option v-for="p in reportPresets" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
         </div>
@@ -327,7 +327,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(pl.lines, 'pl')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('pl')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>
@@ -360,7 +360,7 @@ onMounted(loadPresets);
             </div>
           </div>
           <p class="rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600">
-            A − (L + E) =
+            {{ t('reports.balanceCheck') }}
             {{ bs.assets_liabilities_plus_equity_check?.toFixed?.(4) ?? bs.assets_liabilities_plus_equity_check }}
           </p>
           <ul class="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 bg-white p-3 scrollbar-thin">
@@ -378,7 +378,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(bs.lines, 'bs')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('bs')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>
@@ -428,7 +428,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(cf.lines, 'cf')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('cf')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>
@@ -447,19 +447,19 @@ onMounted(loadPresets);
         <div v-if="apAging" class="space-y-4 text-sm">
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
-              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">0-30</p>
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.bucket0to30') }}</p>
               <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets.current).toFixed(2) }}</p>
             </div>
             <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
-              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">31-60</p>
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.bucket31to60') }}</p>
               <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['31_60']).toFixed(2) }}</p>
             </div>
             <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
-              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">61-90</p>
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.bucket61to90') }}</p>
               <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['61_90']).toFixed(2) }}</p>
             </div>
             <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
-              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">90+</p>
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.bucket90Plus') }}</p>
               <p class="mt-1 text-lg font-bold tabular-nums">{{ Number(apAging.buckets['90_plus']).toFixed(2) }}</p>
             </div>
             <div class="rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 p-4 text-white shadow-lg shadow-brand-900/20">
@@ -478,7 +478,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(apAging.lines, 'ap')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('ap')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>
@@ -522,7 +522,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(trial.lines, 'trial')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('trial')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>
@@ -570,7 +570,7 @@ onMounted(loadPresets);
             </li>
           </ul>
           <button v-if="canLoadMore(ledger.entries, 'ledger')" type="button" class="ui-btn-secondary mt-2 text-xs" @click="loadMore('ledger')">
-            Load more
+            {{ t('reports.loadMore') }}
           </button>
         </div>
       </section>

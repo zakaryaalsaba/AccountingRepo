@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS projects (
   code VARCHAR(60),
   name VARCHAR(255) NOT NULL,
   status project_status NOT NULL DEFAULT 'draft',
-  customer_id UUID REFERENCES customers (id) ON DELETE SET NULL,
+  customer_id BIGINT REFERENCES customers (id) ON DELETE SET NULL,
   manager_name VARCHAR(255),
   start_date DATE,
   end_date DATE,

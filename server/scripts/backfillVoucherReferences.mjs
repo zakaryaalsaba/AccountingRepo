@@ -7,7 +7,11 @@ if (!process.env.DATABASE_URL) {
 }
 
 const APPLY = process.env.APPLY === '1';
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const needsRelaxedSsl = /sslmode=require/i.test(process.env.DATABASE_URL || '');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ...(needsRelaxedSsl ? { ssl: { rejectUnauthorized: false } } : {})
+});
 
 function pad(n, p = 6) {
   return String(Number(n || 0)).padStart(p, '0');
