@@ -72,9 +72,27 @@ const router = createRouter({
           meta: { requiresCompany: true, module: 'accounting' },
         },
         {
+          path: 'bank-treasury',
+          name: 'bank-treasury',
+          component: () => import('@/views/BankTreasuryView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'fiscal-years',
+          name: 'fiscal-years',
+          component: () => import('@/views/FiscalYearsView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
           path: 'audit-trail',
           name: 'audit-trail',
           component: () => import('@/views/AuditTrailView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'approvals',
+          name: 'approvals',
+          component: () => import('@/views/ApprovalsInboxView.vue'),
           meta: { requiresCompany: true, module: 'accounting' },
         },
         {
@@ -87,6 +105,12 @@ const router = createRouter({
           path: 'vouchers',
           name: 'vouchers',
           component: () => import('@/views/VouchersView.vue'),
+          meta: { requiresCompany: true, module: 'accounting' },
+        },
+        {
+          path: 'cheques',
+          name: 'cheques',
+          component: () => import('@/views/ChequesView.vue'),
           meta: { requiresCompany: true, module: 'accounting' },
         },
         {

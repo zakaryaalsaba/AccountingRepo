@@ -24,6 +24,7 @@ const csvDryRun = ref(null);
 const accountQuery = ref('');
 const autosaveState = ref('idle');
 const DRAFT_STORAGE_KEY = 'tx-workbench-draft-v1';
+const workflowRequests = ref([]);
 
 const entry = ref({
   doc_type: 'journal_voucher',
@@ -74,12 +75,14 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [tx, acc] = await Promise.all([
+    const [tx, acc, wr] = await Promise.all([
       api.get('/api/transactions'),
       api.get('/api/accounts'),
+      api.get('/api/audit/workflow/requests').catch(() => ({ data: { requests: [] } })),
     ]);
     transactions.value = tx.data.transactions || [];
     accounts.value = acc.data.accounts || [];
+    workflowRequests.value = wr.data.requests || [];
     try {
       const dim = await api.get('/api/dimensions');
       dimensions.value = dim.data.dimensions || [];
@@ -96,6 +99,24 @@ async function load() {
     error.value = e.response?.data?.error || t('common.error');
   } finally {
     loading.value = false;
+  }
+}
+
+function getTxRequest(txId) {
+  return workflowRequests.value.find((r) => String(r.entity_id) === String(txId)) || null;
+}
+
+async function requestApproval(tx) {
+  try {
+    await api.post('/api/audit/workflow/requests', {
+      doc_type: 'transaction',
+      entity_id: tx.id,
+      amount: Number(tx.total_amount || 0),
+      note: `Request approval for transaction ${tx.reference || tx.id}`,
+    });
+    await load();
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
   }
 }
 
@@ -631,6 +652,9 @@ watch(
               >
                 {{ tx.status || 'posted' }}
               </span>
+              <span v-if="getTxRequest(tx.id)" class="ui-badge-slate ms-1">
+                {{ t('approvals.lockState') }}: {{ getTxRequest(tx.id)?.status }}
+              </span>
             </td>
             <td>
               <button type="button" class="ui-btn-danger !px-2 !py-1.5 text-sm" @click="remove(tx.id)">
@@ -643,6 +667,14 @@ watch(
                 @click="editDraft(tx)"
               >
                 {{ t('txWorkbench.editDraft') }}
+              </button>
+              <button
+                v-if="!getTxRequest(tx.id)"
+                type="button"
+                class="ui-btn-secondary !px-2 !py-1.5 text-sm ms-1"
+                @click="requestApproval(tx)"
+              >
+                {{ t('approvals.requestApproval') }}
               </button>
             </td>
           </tr>

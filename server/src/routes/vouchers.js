@@ -110,6 +110,7 @@ router.post('/', async (req, res) => {
       bill_allocations = [],
       vendor_prepayments = [],
       bill_credit_allocations = [],
+      status = 'posted',
       branch_id = null,
       service_card_id = null,
       project_id = null,
@@ -118,6 +119,9 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'family must be receipt/payment/transfer/adjustment' });
     }
     if (!entry_date) return res.status(400).json({ error: 'entry_date is required' });
+    if (!['draft', 'posted'].includes(String(status))) {
+      return res.status(400).json({ error: 'status must be draft or posted' });
+    }
     const amt = r2(amount);
     if (amt <= 0) return res.status(400).json({ error: 'amount must be positive' });
     if (!source_account_id || !destination_account_id) {
@@ -166,38 +170,40 @@ router.post('/', async (req, res) => {
         effectiveAmount = r2(amt * Number(exchange_rate));
       }
 
-      const lines = [
-        { account_id: destination_account_id, debit: effectiveAmount, credit: 0 },
-        { account_id: source_account_id, debit: 0, credit: effectiveAmount },
-      ];
+      let tx = null;
+      if (String(status) === 'posted') {
+        const lines = [
+          { account_id: destination_account_id, debit: effectiveAmount, credit: 0 },
+          { account_id: source_account_id, debit: 0, credit: effectiveAmount },
+        ];
 
-      // Optional realized FX line based on settlement base amount.
-      if (isForeign && settlement_base_amount !== null && settlement_base_amount !== undefined) {
-        const settle = r2(settlement_base_amount);
-        const diff = r2(settle - effectiveAmount);
-        if (Math.abs(diff) >= 0.01) {
-          const fx = await getFxAccounts(req.company.id, client);
-          const fxAcc = diff > 0 ? fx.gainAccountId : fx.lossAccountId;
-          if (fxAcc) {
-            if (diff > 0) {
-              lines.push({ account_id: fxAcc, debit: 0, credit: Math.abs(diff) });
-              lines[0].debit = r2(lines[0].debit + Math.abs(diff));
-            } else {
-              lines.push({ account_id: fxAcc, debit: Math.abs(diff), credit: 0 });
-              lines[1].credit = r2(lines[1].credit + Math.abs(diff));
+        // Optional realized FX line based on settlement base amount.
+        if (isForeign && settlement_base_amount !== null && settlement_base_amount !== undefined) {
+          const settle = r2(settlement_base_amount);
+          const diff = r2(settle - effectiveAmount);
+          if (Math.abs(diff) >= 0.01) {
+            const fx = await getFxAccounts(req.company.id, client);
+            const fxAcc = diff > 0 ? fx.gainAccountId : fx.lossAccountId;
+            if (fxAcc) {
+              if (diff > 0) {
+                lines.push({ account_id: fxAcc, debit: 0, credit: Math.abs(diff) });
+                lines[0].debit = r2(lines[0].debit + Math.abs(diff));
+              } else {
+                lines.push({ account_id: fxAcc, debit: Math.abs(diff), credit: 0 });
+                lines[1].credit = r2(lines[1].credit + Math.abs(diff));
+              }
             }
           }
         }
+        tx = await createTransaction(
+          client,
+          req.company.id,
+          entry_date,
+          description || `${family} voucher`,
+          reference || null,
+          lines
+        );
       }
-
-      const tx = await createTransaction(
-        client,
-        req.company.id,
-        entry_date,
-        description || `${family} voucher`,
-        reference || null,
-        lines
-      );
 
       const v = await client.query(
         `INSERT INTO vouchers (
@@ -205,7 +211,7 @@ router.post('/', async (req, res) => {
            source_account_id, destination_account_id, reference, description, status, transaction_id, created_by,
            branch_id, service_card_id, project_id
          )
-         VALUES ($1,$2::voucher_family,$3,$4,$5,$6,$7,$8,$9,$10,$11,'posted',$12,$13,$14,$15,$16)
+         VALUES ($1,$2::voucher_family,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          RETURNING *`,
         [
           req.company.id,
@@ -219,7 +225,8 @@ router.post('/', async (req, res) => {
           destination_account_id,
           reference || null,
           description || null,
-          tx.id,
+          String(status),
+          tx?.id || null,
           req.user.id,
           branch_id,
           service_card_id,
@@ -248,12 +255,14 @@ router.post('/', async (req, res) => {
              VALUES ($1,$2,$3,$4)`,
             [req.company.id, voucher.id, a.invoice_id, applied]
           );
-          const newPaid = r2(inv.rows[0].paid_amount + applied);
-          const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= inv.rows[0].total_amount ? 'paid' : 'partially_paid');
-          await client.query(
-            `UPDATE invoices SET paid_amount = $1, status = $2::invoice_status WHERE id = $3 AND company_id = $4`,
-            [newPaid, newStatus, a.invoice_id, req.company.id]
-          );
+          if (String(status) === 'posted') {
+            const newPaid = r2(inv.rows[0].paid_amount + applied);
+            const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= inv.rows[0].total_amount ? 'paid' : 'partially_paid');
+            await client.query(
+              `UPDATE invoices SET paid_amount = $1, status = $2::invoice_status WHERE id = $3 AND company_id = $4`,
+              [newPaid, newStatus, a.invoice_id, req.company.id]
+            );
+          }
         }
         for (const b of receipt_customer_balances || []) {
           const x = r2(b.amount);
@@ -286,12 +295,14 @@ router.post('/', async (req, res) => {
              VALUES ($1,$2,$3,$4)`,
             [req.company.id, voucher.id, a.bill_id, applied]
           );
-          const newPaid = r2(b.rows[0].paid_amount + applied);
-          const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= b.rows[0].total_amount ? 'paid' : 'partially_paid');
-          await client.query(
-            `UPDATE bills SET paid_amount = $1, status = $2::bill_status WHERE id = $3 AND company_id = $4`,
-            [newPaid, newStatus, a.bill_id, req.company.id]
-          );
+          if (String(status) === 'posted') {
+            const newPaid = r2(b.rows[0].paid_amount + applied);
+            const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= b.rows[0].total_amount ? 'paid' : 'partially_paid');
+            await client.query(
+              `UPDATE bills SET paid_amount = $1, status = $2::bill_status WHERE id = $3 AND company_id = $4`,
+              [newPaid, newStatus, a.bill_id, req.company.id]
+            );
+          }
         }
         for (const p of vendor_prepayments || []) {
           const x = r2(p.amount);
@@ -328,6 +339,101 @@ router.post('/', async (req, res) => {
       if (e.status === 400) return res.status(400).json({ error: e.message });
       console.error(e);
       return res.status(500).json({ error: 'Failed to create voucher' });
+    } finally {
+      client.release();
+    }
+  });
+});
+
+router.post('/:id/post', async (req, res) => {
+  return requirePermission('transactions.create')(req, res, async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query(
+        `SELECT * FROM vouchers WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+        [req.params.id, req.company.id]
+      );
+      if (!r.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Voucher not found' });
+      }
+      const v = r.rows[0];
+      if (String(v.status) === 'posted') {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Voucher is already posted' });
+      }
+      await assertDateOpen(req.company.id, v.entry_date, client);
+      await assertFiscalYearOpen(req.company.id, v.entry_date, client);
+      const lines = [
+        { account_id: v.destination_account_id, debit: r2(v.amount), credit: 0 },
+        { account_id: v.source_account_id, debit: 0, credit: r2(v.amount) },
+      ];
+      const tx = await createTransaction(
+        client,
+        req.company.id,
+        v.entry_date,
+        v.description || `${v.family} voucher`,
+        v.reference || null,
+        lines
+      );
+      if (String(v.family) === 'receipt') {
+        const a = await client.query(
+          `SELECT invoice_id, amount FROM receipt_invoice_allocations WHERE company_id = $1 AND voucher_id = $2`,
+          [req.company.id, v.id]
+        );
+        for (const row of a.rows) {
+          const inv = await client.query(
+            `SELECT id, total_amount, paid_amount FROM invoices WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+            [row.invoice_id, req.company.id]
+          );
+          if (!inv.rows.length) continue;
+          const remaining = r2(inv.rows[0].total_amount - inv.rows[0].paid_amount);
+          const applied = Math.min(r2(row.amount), remaining);
+          if (applied <= 0) continue;
+          const newPaid = r2(inv.rows[0].paid_amount + applied);
+          const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= inv.rows[0].total_amount ? 'paid' : 'partially_paid');
+          await client.query(
+            `UPDATE invoices SET paid_amount = $1, status = $2::invoice_status WHERE id = $3 AND company_id = $4`,
+            [newPaid, newStatus, row.invoice_id, req.company.id]
+          );
+        }
+      }
+      if (String(v.family) === 'payment') {
+        const a = await client.query(
+          `SELECT bill_id, amount FROM payment_bill_allocations WHERE company_id = $1 AND voucher_id = $2`,
+          [req.company.id, v.id]
+        );
+        for (const row of a.rows) {
+          const bill = await client.query(
+            `SELECT id, total_amount, paid_amount FROM bills WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+            [row.bill_id, req.company.id]
+          );
+          if (!bill.rows.length) continue;
+          const remaining = r2(bill.rows[0].total_amount - bill.rows[0].paid_amount);
+          const applied = Math.min(r2(row.amount), remaining);
+          if (applied <= 0) continue;
+          const newPaid = r2(bill.rows[0].paid_amount + applied);
+          const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= bill.rows[0].total_amount ? 'paid' : 'partially_paid');
+          await client.query(
+            `UPDATE bills SET paid_amount = $1, status = $2::bill_status WHERE id = $3 AND company_id = $4`,
+            [newPaid, newStatus, row.bill_id, req.company.id]
+          );
+        }
+      }
+      const up = await client.query(
+        `UPDATE vouchers
+         SET status = 'posted', transaction_id = $3, updated_at = NOW()
+         WHERE id = $1 AND company_id = $2
+         RETURNING *`,
+        [v.id, req.company.id, tx.id]
+      );
+      await client.query('COMMIT');
+      return res.json({ voucher: up.rows[0] });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error(e);
+      return res.status(500).json({ error: 'Failed to post voucher' });
     } finally {
       client.release();
     }

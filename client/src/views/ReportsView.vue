@@ -31,6 +31,24 @@ const loading = ref(false);
 const reportPresetName = ref('');
 const presetStorageKey = 'reports-presets-v1';
 const reportPresets = ref([]);
+const reportCatalog = ref([]);
+const libraryReportKey = ref('projects/profitability');
+const libraryLoading = ref(false);
+const libraryResult = ref(null);
+const libraryRows = ref([]);
+const libraryColumns = ref([]);
+const libraryFilters = ref({
+  from: from.value,
+  to: to.value,
+  as_of: asOf.value,
+  account_type: '',
+  level: '',
+  branch_id: '',
+  project_id: '',
+  service_card_id: '',
+  account_id: '',
+  variant: 'detailed',
+});
 const rowLimits = ref({
   pl: 80,
   bs: 80,
@@ -39,6 +57,13 @@ const rowLimits = ref({
   trial: 80,
   ledger: 80,
 });
+const cardAccountId = ref('');
+const cardReport = ref(null);
+const cardExpenses = ref([]);
+const cardPayments = ref([]);
+const cardPayableLinks = ref([]);
+const cardLoading = ref(false);
+const selectedCardVendor = ref('');
 
 function visibleRows(list, key) {
   if (!Array.isArray(list)) return [];
@@ -93,6 +118,74 @@ function applyPreset(id) {
   toB.value = p.filters.toB;
   asOfB.value = p.filters.asOfB;
   ledgerAccountId.value = p.filters.ledgerAccountId || ledgerAccountId.value;
+}
+
+function flattenRows(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  const candidates = Object.values(payload).filter(Array.isArray);
+  if (!candidates.length) return [];
+  const best = [...candidates].sort((a, b) => b.length - a.length)[0];
+  return Array.isArray(best) ? best : [];
+}
+
+function computeColumns(rows) {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  return Object.keys(rows[0]).slice(0, 8);
+}
+
+async function loadReportCatalog() {
+  if (!company.currentCompanyId) return;
+  try {
+    const { data } = await api.get('/api/reports/catalog');
+    reportCatalog.value = data.reports || [];
+  } catch {
+    reportCatalog.value = [];
+  }
+}
+
+async function runLibraryReport() {
+  if (!company.currentCompanyId || !libraryReportKey.value) return;
+  libraryLoading.value = true;
+  error.value = '';
+  try {
+    const params = {};
+    Object.entries(libraryFilters.value).forEach(([k, v]) => {
+      if (v !== '' && v !== null && v !== undefined) params[k] = v;
+    });
+    const { data } = await api.get(`/api/reports/${libraryReportKey.value}`, { params });
+    libraryResult.value = data;
+    libraryRows.value = flattenRows(data);
+    libraryColumns.value = computeColumns(libraryRows.value);
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    libraryResult.value = null;
+    libraryRows.value = [];
+    libraryColumns.value = [];
+  } finally {
+    libraryLoading.value = false;
+  }
+}
+
+function printLibrary() {
+  window.print();
+}
+
+function exportLibrary() {
+  const rows = libraryRows.value;
+  if (!rows.length) return;
+  const cols = libraryColumns.value;
+  const csv = [cols, ...rows.map((r) => cols.map((c) => (r[c] ?? '')))]
+    .map((line) => line.map((x) => `"${String(x).replaceAll('"', '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `report_${libraryReportKey.value.replaceAll('/', '_')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function runPL() {
@@ -234,6 +327,62 @@ async function runCompare() {
   }
 }
 
+async function runCardReports() {
+  if (!company.currentCompanyId || !cardAccountId.value) return;
+  cardLoading.value = true;
+  error.value = '';
+  try {
+    const [cardRes, expensesRes, paymentsRes, apRes] = await Promise.all([
+      api.get('/api/reports/account-card', {
+        params: {
+          account_id: cardAccountId.value,
+          from: from.value,
+          to: to.value,
+          variant: 'detailed',
+          limit: 400,
+          offset: 0,
+        },
+      }),
+      api.get('/api/expenses'),
+      api.get('/api/payments'),
+      api.get('/api/reports/ap-aging', { params: { as_of: asOf.value } }),
+    ]);
+
+    cardReport.value = cardRes.data || null;
+    const expenses = (expensesRes.data?.expenses || []).filter((x) => String(x.payment_method || '').toLowerCase() === 'card');
+    const payments = (paymentsRes.data?.payments || []).filter((x) => String(x.method || '').toLowerCase() === 'card');
+    cardExpenses.value = expenses;
+    cardPayments.value = payments.map((p) => {
+      const unallocated = Number(p.unallocated_amount ?? p.unallocated ?? 0);
+      return {
+        ...p,
+        settlement_status: unallocated > 0 ? 'unsettled' : 'settled',
+      };
+    });
+
+    const apLines = apRes.data?.lines || [];
+    cardPayableLinks.value = expenses
+      .map((e) => ({
+        expense_id: e.id,
+        vendor_name: e.vendor_name || '-',
+        expense_amount: Number(e.amount || 0),
+        expense_date: e.expense_date,
+        matched_payables: apLines.filter((ap) =>
+          String(ap.vendor_name || '').toLowerCase() === String(e.vendor_name || '').toLowerCase()
+        ),
+      }))
+      .filter((x) => x.matched_payables.length > 0);
+  } catch (e) {
+    error.value = e.response?.data?.error || t('common.error');
+    cardReport.value = null;
+    cardExpenses.value = [];
+    cardPayments.value = [];
+    cardPayableLinks.value = [];
+  } finally {
+    cardLoading.value = false;
+  }
+}
+
 watch(() => company.currentCompanyId, () => {
   pl.value = null;
   bs.value = null;
@@ -258,6 +407,13 @@ watch(
 
 onMounted(loadAccounts);
 onMounted(loadPresets);
+onMounted(loadReportCatalog);
+watch(accounts, () => {
+  if (!cardAccountId.value && accounts.value.length) {
+    const candidate = accounts.value.find((a) => /card|بطاقة/i.test(`${a.name || ''} ${a.code || ''}`));
+    cardAccountId.value = candidate?.id || accounts.value[0].id;
+  }
+});
 </script>
 
 <template>
@@ -619,6 +775,150 @@ onMounted(loadPresets);
           <p>{{ t('reports.delta') }} {{ t('reports.assets') }}: {{ Number(bsCompare.delta.assets).toFixed(2) }}</p>
           <p>{{ t('reports.delta') }} {{ t('reports.liabilities') }}: {{ Number(bsCompare.delta.liabilities).toFixed(2) }}</p>
           <p class="font-semibold">{{ t('reports.delta') }} {{ t('reports.equity') }}: {{ Number(bsCompare.delta.equity).toFixed(2) }}</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="ui-card ui-card-pad relative overflow-hidden mt-6">
+      <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="ui-card-title">{{ t('reports.libraryTitle') }}</h2>
+        <div class="flex gap-2">
+          <button type="button" class="ui-btn-secondary text-xs" @click="printLibrary">{{ t('reports.print') }}</button>
+          <button type="button" class="ui-btn-secondary text-xs" @click="exportLibrary">{{ t('reports.export') }}</button>
+        </div>
+      </div>
+      <div class="grid gap-3 lg:grid-cols-4">
+        <select v-model="libraryReportKey" class="ui-select lg:col-span-2">
+          <option v-for="r in reportCatalog" :key="r.slug" :value="r.slug">{{ r.name }}</option>
+        </select>
+        <input v-model="libraryFilters.from" type="date" class="ui-input" />
+        <input v-model="libraryFilters.to" type="date" class="ui-input" />
+        <input v-model="libraryFilters.as_of" type="date" class="ui-input" />
+        <select v-model="libraryFilters.account_type" class="ui-select">
+          <option value="">{{ t('reports.accountType') }}</option>
+          <option value="ASSET">ASSET</option>
+          <option value="LIABILITY">LIABILITY</option>
+          <option value="EQUITY">EQUITY</option>
+          <option value="REVENUE">REVENUE</option>
+          <option value="EXPENSE">EXPENSE</option>
+        </select>
+        <input v-model="libraryFilters.level" type="number" min="1" max="6" class="ui-input" :placeholder="t('reports.level')" />
+        <input v-model="libraryFilters.branch_id" class="ui-input" :placeholder="t('reports.branchId')" />
+        <input v-model="libraryFilters.project_id" class="ui-input" :placeholder="t('reports.projectId')" />
+        <input v-model="libraryFilters.service_card_id" class="ui-input" :placeholder="t('reports.serviceCardId')" />
+        <select v-model="libraryFilters.account_id" class="ui-select">
+          <option value="">{{ t('reports.account') }}</option>
+          <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.code }} — {{ a.name }}</option>
+        </select>
+        <select v-model="libraryFilters.variant" class="ui-select">
+          <option value="detailed">detailed</option>
+          <option value="summary">summary</option>
+          <option value="grouped">grouped</option>
+        </select>
+      </div>
+      <button type="button" class="ui-btn-primary mt-3" :disabled="libraryLoading" @click="runLibraryReport">{{ t('reports.run') }}</button>
+
+      <div v-if="libraryRows.length" class="mt-4 ui-table-wrap">
+        <table class="ui-table">
+          <thead>
+            <tr>
+              <th v-for="c in libraryColumns" :key="c">{{ c }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(r, idx) in visibleRows(libraryRows, 'pl')" :key="idx">
+              <td v-for="c in libraryColumns" :key="`${idx}-${c}`">{{ r[c] }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-else-if="libraryResult" class="mt-3 text-sm text-slate-600">{{ t('reports.noRows') }}</p>
+    </section>
+
+    <section class="ui-card ui-card-pad relative overflow-hidden mt-6">
+      <h2 class="ui-card-title mb-4">{{ t('reports.cardTitle') }}</h2>
+      <div class="grid gap-3 lg:grid-cols-5">
+        <select v-model="cardAccountId" class="ui-select lg:col-span-2">
+          <option value="">{{ t('reports.account') }}</option>
+          <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.code }} — {{ a.name }}</option>
+        </select>
+        <input v-model="from" type="date" class="ui-input" />
+        <input v-model="to" type="date" class="ui-input" />
+        <input v-model="asOf" type="date" class="ui-input" />
+      </div>
+      <button type="button" class="ui-btn-primary mt-3" :disabled="cardLoading" @click="runCardReports">{{ t('reports.run') }}</button>
+
+      <div v-if="cardReport" class="mt-4 grid gap-4 lg:grid-cols-3 text-sm">
+        <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+          <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.cardEntries') }}</p>
+          <p class="mt-1 text-lg font-bold tabular-nums">{{ cardReport.pagination?.total_count || cardReport.rows?.length || 0 }}</p>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+          <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.cardExpenses') }}</p>
+          <p class="mt-1 text-lg font-bold tabular-nums">{{ cardExpenses.length }}</p>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-100">
+          <p class="text-xs font-bold uppercase tracking-wide text-slate-500">{{ t('reports.cardUnsettledPayments') }}</p>
+          <p class="mt-1 text-lg font-bold tabular-nums">{{ cardPayments.filter((x) => x.settlement_status === 'unsettled').length }}</p>
+        </div>
+      </div>
+
+      <div v-if="cardPayments.length" class="mt-4">
+        <h3 class="mb-2 text-sm font-semibold">{{ t('reports.cardSettlementStatus') }}</h3>
+        <div class="ui-table-wrap">
+          <table class="ui-table">
+            <thead>
+              <tr>
+                <th>{{ t('reports.date') }}</th>
+                <th>{{ t('reports.amount') }}</th>
+                <th>{{ t('reports.reference') }}</th>
+                <th>{{ t('reports.status') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="p in cardPayments" :key="p.id">
+                <td>{{ String(p.payment_date || p.date || '').slice(0, 10) }}</td>
+                <td>{{ Number(p.amount || 0).toFixed(2) }}</td>
+                <td>{{ p.reference || '-' }}</td>
+                <td>
+                  <span class="ui-badge-slate">{{ p.settlement_status === 'settled' ? t('reports.settled') : t('reports.unsettled') }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-if="cardPayableLinks.length" class="mt-4">
+        <div class="mb-2 flex items-center gap-2">
+          <h3 class="text-sm font-semibold">{{ t('reports.cardPayableDrilldown') }}</h3>
+          <select v-model="selectedCardVendor" class="ui-select w-64">
+            <option value="">{{ t('reports.allVendors') }}</option>
+            <option v-for="r in cardPayableLinks" :key="r.expense_id" :value="r.vendor_name">{{ r.vendor_name }}</option>
+          </select>
+        </div>
+        <div class="ui-table-wrap">
+          <table class="ui-table">
+            <thead>
+              <tr>
+                <th>{{ t('expenses.vendor') }}</th>
+                <th>{{ t('reports.amount') }}</th>
+                <th>{{ t('reports.date') }}</th>
+                <th>{{ t('reports.payableOpenItems') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="r in cardPayableLinks.filter((x) => !selectedCardVendor || x.vendor_name === selectedCardVendor)"
+                :key="r.expense_id"
+              >
+                <td>{{ r.vendor_name }}</td>
+                <td>{{ Number(r.expense_amount || 0).toFixed(2) }}</td>
+                <td>{{ String(r.expense_date || '').slice(0, 10) }}</td>
+                <td>{{ r.matched_payables.length }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>

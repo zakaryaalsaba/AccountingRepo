@@ -3,6 +3,7 @@ import { pool, query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { createAccountAuto } from '../utils/accountHierarchy.js';
+import { writeAuditEvent } from '../utils/auditLog.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -111,6 +112,144 @@ router.patch('/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to update account' });
+  }
+});
+
+router.patch('/:id/move', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { new_parent_id = null } = req.body || {};
+    const cur = await client.query(
+      `SELECT id, company_id, account_code, type::text, parent_id, level
+       FROM accounts
+       WHERE id = $1 AND company_id = $2`,
+      [req.params.id, req.company.id]
+    );
+    if (!cur.rows.length) return res.status(404).json({ error: 'Account not found' });
+    const account = cur.rows[0];
+    const targetParentId = new_parent_id || null;
+    if (targetParentId === account.id) {
+      return res.status(400).json({ error: 'Account cannot be moved under itself' });
+    }
+
+    let parent = null;
+    if (targetParentId) {
+      const p = await client.query(
+        `SELECT id, account_code, type::text, level
+         FROM accounts
+         WHERE id = $1 AND company_id = $2`,
+        [targetParentId, req.company.id]
+      );
+      if (!p.rows.length) return res.status(400).json({ error: 'Invalid target parent account' });
+      parent = p.rows[0];
+      if (parent.type !== account.type) {
+        return res.status(400).json({ error: 'Target parent must have the same account type' });
+      }
+    }
+
+    // Prevent cycles: new parent cannot be one of this account descendants.
+    if (targetParentId) {
+      const descendants = await client.query(
+        `WITH RECURSIVE tree AS (
+           SELECT id FROM accounts WHERE parent_id = $1 AND company_id = $2
+           UNION ALL
+           SELECT a.id
+           FROM accounts a
+           JOIN tree t ON a.parent_id = t.id
+           WHERE a.company_id = $2
+         )
+         SELECT id FROM tree`,
+        [account.id, req.company.id]
+      );
+      const blocked = new Set(descendants.rows.map((r) => r.id));
+      if (blocked.has(targetParentId)) {
+        return res.status(400).json({ error: 'Target parent cannot be a child of this account' });
+      }
+    }
+
+    const maxChildDepth = await client.query(
+      `WITH RECURSIVE tree AS (
+         SELECT id, 0::int AS d FROM accounts WHERE id = $1 AND company_id = $2
+         UNION ALL
+         SELECT a.id, t.d + 1
+         FROM accounts a
+         JOIN tree t ON a.parent_id = t.id
+         WHERE a.company_id = $2
+       )
+       SELECT COALESCE(MAX(d), 0) AS max_d FROM tree`,
+      [account.id, req.company.id]
+    );
+    const subtreeDepth = Number(maxChildDepth.rows[0]?.max_d || 0);
+    const newRootLevel = parent ? Number(parent.level) + 1 : 1;
+    if (newRootLevel + subtreeDepth > 5) {
+      return res.status(400).json({ error: 'Move would exceed maximum account depth (5 levels)' });
+    }
+
+    const levelDelta = newRootLevel - Number(account.level);
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE accounts SET parent_id = $3, level = $4 WHERE id = $1 AND company_id = $2`,
+      [account.id, req.company.id, targetParentId, newRootLevel]
+    );
+    if (levelDelta !== 0) {
+      await client.query(
+        `WITH RECURSIVE tree AS (
+           SELECT id FROM accounts WHERE parent_id = $1 AND company_id = $2
+           UNION ALL
+           SELECT a.id
+           FROM accounts a
+           JOIN tree t ON a.parent_id = t.id
+           WHERE a.company_id = $2
+         )
+         UPDATE accounts a
+         SET level = a.level + $3
+         FROM tree
+         WHERE a.id = tree.id`,
+        [account.id, req.company.id, levelDelta]
+      );
+    }
+    await client.query('COMMIT');
+
+    await writeAuditEvent({
+      companyId: req.company.id,
+      actorUserId: req.user.id,
+      eventType: 'account.moved',
+      entityType: 'account',
+      entityId: account.id,
+      details: {
+        old_parent_id: account.parent_id,
+        new_parent_id: targetParentId,
+      },
+    });
+    return res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to move account' });
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/bulk-status', async (req, res) => {
+  try {
+    const { account_ids, is_active } = req.body || {};
+    if (!Array.isArray(account_ids) || !account_ids.length) {
+      return res.status(400).json({ error: 'account_ids is required' });
+    }
+    const ids = account_ids.filter(Boolean);
+    const active = Boolean(is_active);
+    const up = await query(
+      `UPDATE accounts
+       SET is_active = $1
+       WHERE company_id = $2 AND id = ANY($3::uuid[])
+       RETURNING id`,
+      [active, req.company.id, ids]
+    );
+    return res.json({ updated_count: up.rowCount });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to update accounts status' });
   }
 });
 

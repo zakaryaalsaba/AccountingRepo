@@ -39,6 +39,12 @@ async function main() {
     '/api/enterprise/feature-flags',
     '/api/service-invoices',
     '/api/projects',
+    '/api/cheques',
+    '/api/bank-accounts',
+    '/api/treasury-safes',
+    '/api/audit/workflow/requests',
+    '/api/audit/notifications',
+    '/api/reports/account-card',
   ];
   for (const path of checks) {
     const r = await fetch(`${API_BASE_URL}${path}`, { headers });

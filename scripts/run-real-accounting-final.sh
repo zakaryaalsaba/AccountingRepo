@@ -25,6 +25,7 @@ MIGRATIONS=(
   "$ROOT_DIR/database/migrations/034_workflow_controls.sql"
   "$ROOT_DIR/database/migrations/035_audit_compliance_enhancements.sql"
   "$ROOT_DIR/database/migrations/036_feature_flags.sql"
+  "$ROOT_DIR/database/migrations/037_bank_treasury_master_expansion.sql"
 )
 
 echo "==> Running Real Accounting bundle migrations"

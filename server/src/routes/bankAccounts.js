@@ -4,6 +4,7 @@ import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
 import { attachAuthorization, requireRole } from '../middleware/authorization.js';
 import { bankSettlementSchemaHint, bankSettlementTablesExist } from '../utils/bankSettlementSchema.js';
+import { writeAuditEvent } from '../utils/auditLog.js';
 
 const router = Router();
 router.use(authRequired, companyContext);
@@ -27,15 +28,29 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { name, bank_name, account_number_masked, currency_code, opening_balance } = req.body || {};
+    const {
+      name,
+      bank_name,
+      account_number_masked,
+      currency_code,
+      opening_balance,
+      gl_account_id,
+      iban,
+      swift_code,
+      branch_name,
+      account_owner_name,
+      opening_date,
+      opening_reference,
+    } = req.body || {};
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'name is required' });
     }
     const ins = await query(
       `INSERT INTO bank_accounts (
-         company_id, name, bank_name, account_number_masked, currency_code, opening_balance
+         company_id, name, bank_name, account_number_masked, currency_code, opening_balance,
+         gl_account_id, iban, swift_code, branch_name, account_owner_name, opening_date, opening_reference
        )
-       VALUES ($1, $2, $3, $4, $5, $6)
+       VALUES ($1, $2, $3, $4, $5, $6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         req.company.id,
@@ -44,6 +59,13 @@ router.post('/', async (req, res) => {
         account_number_masked ? String(account_number_masked).trim() : null,
         currency_code ? String(currency_code).trim().toUpperCase() : 'SAR',
         Number(opening_balance || 0),
+        gl_account_id || null,
+        iban ? String(iban).trim() : null,
+        swift_code ? String(swift_code).trim() : null,
+        branch_name ? String(branch_name).trim() : null,
+        account_owner_name ? String(account_owner_name).trim() : null,
+        opening_date || null,
+        opening_reference ? String(opening_reference).trim() : null,
       ]
     );
     return res.status(201).json({ bank_account: ins.rows[0] });
@@ -69,8 +91,16 @@ router.patch('/:id', async (req, res) => {
            account_number_masked = $3,
            currency_code = $4,
            opening_balance = $5,
-           is_active = $6
-       WHERE id = $7 AND company_id = $8
+           is_active = $6,
+           gl_account_id = $7,
+           iban = $8,
+           swift_code = $9,
+           branch_name = $10,
+           account_owner_name = $11,
+           opening_date = $12,
+           opening_reference = $13,
+           updated_at = NOW()
+       WHERE id = $14 AND company_id = $15
        RETURNING *`,
       [
         body.name !== undefined ? String(body.name).trim() : row.name,
@@ -83,6 +113,13 @@ router.patch('/:id', async (req, res) => {
           : row.currency_code,
         body.opening_balance !== undefined ? Number(body.opening_balance) : row.opening_balance,
         body.is_active !== undefined ? Boolean(body.is_active) : row.is_active,
+        body.gl_account_id !== undefined ? (body.gl_account_id || null) : row.gl_account_id,
+        body.iban !== undefined ? (body.iban ? String(body.iban).trim() : null) : row.iban,
+        body.swift_code !== undefined ? (body.swift_code ? String(body.swift_code).trim() : null) : row.swift_code,
+        body.branch_name !== undefined ? (body.branch_name ? String(body.branch_name).trim() : null) : row.branch_name,
+        body.account_owner_name !== undefined ? (body.account_owner_name ? String(body.account_owner_name).trim() : null) : row.account_owner_name,
+        body.opening_date !== undefined ? (body.opening_date || null) : row.opening_date,
+        body.opening_reference !== undefined ? (body.opening_reference ? String(body.opening_reference).trim() : null) : row.opening_reference,
         req.params.id,
         req.company.id,
       ]
@@ -91,6 +128,70 @@ router.patch('/:id', async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: 'Failed to update bank account' });
+  }
+});
+
+router.post('/:id/opening-balance/post', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { entry_date, offset_account_id } = req.body || {};
+    if (!entry_date || !offset_account_id) {
+      return res.status(400).json({ error: 'entry_date and offset_account_id are required' });
+    }
+    await client.query('BEGIN');
+    const b = await client.query(
+      `SELECT * FROM bank_accounts WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [req.params.id, req.company.id]
+    );
+    if (!b.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Bank account not found' });
+    }
+    const bank = b.rows[0];
+    if (!bank.gl_account_id) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Bank account GL account is required before posting opening balance' });
+    }
+    const amt = Number(bank.opening_balance || 0);
+    if (amt === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Opening balance is zero' });
+    }
+    const tx = await client.query(
+      `INSERT INTO transactions (company_id, entry_date, description, reference)
+       VALUES ($1,$2,$3,$4)
+       RETURNING *`,
+      [req.company.id, entry_date, `Opening balance - bank ${bank.name}`, bank.opening_reference || `BANK-OPEN-${bank.id.slice(0, 8)}`]
+    );
+    if (amt > 0) {
+      await client.query(
+        `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit)
+         VALUES ($1,$2,$3,0),($1,$4,0,$3)`,
+        [tx.rows[0].id, bank.gl_account_id, Math.abs(amt), offset_account_id]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO transaction_lines (transaction_id, account_id, debit, credit)
+         VALUES ($1,$2,0,$3),($1,$4,$3,0)`,
+        [tx.rows[0].id, bank.gl_account_id, Math.abs(amt), offset_account_id]
+      );
+    }
+    await client.query('COMMIT');
+    await writeAuditEvent({
+      companyId: req.company.id,
+      actorUserId: req.user.id,
+      eventType: 'bank_account.opening_balance_posted',
+      entityType: 'bank_account',
+      entityId: bank.id,
+      details: { transaction_id: tx.rows[0].id, entry_date },
+    });
+    return res.status(201).json({ transaction: tx.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to post bank opening balance' });
+  } finally {
+    client.release();
   }
 });
 

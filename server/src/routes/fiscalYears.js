@@ -91,6 +91,112 @@ router.post('/', async (req, res) => {
   });
 });
 
+router.patch('/:id', async (req, res) => {
+  return requireRole(['owner', 'admin'])(req, res, async () => {
+    try {
+      if (!(await guardSchema(res))) return;
+      const cur = await query(`SELECT * FROM fiscal_years WHERE id = $1 AND company_id = $2`, [
+        req.params.id,
+        req.company.id,
+      ]);
+      if (!cur.rows.length) return res.status(404).json({ error: 'Fiscal year not found' });
+
+      const {
+        year_code,
+        name_ar,
+        name_en,
+        start_date,
+        end_date,
+        is_active,
+        is_closed,
+      } = req.body || {};
+
+      const hasYearCode = year_code !== undefined && year_code !== null && String(year_code).trim() !== '';
+      const y = hasYearCode ? Number(year_code) : Number(cur.rows[0].year_code);
+      if (!Number.isInteger(y) || y < 2000 || y > 3000) {
+        return res.status(400).json({ error: 'year_code must be a valid integer (e.g. 2026)' });
+      }
+
+      const nextStart = start_date || cur.rows[0].start_date;
+      const nextEnd = end_date || cur.rows[0].end_date;
+      if (!nextStart || !nextEnd) {
+        return res.status(400).json({ error: 'start_date and end_date are required' });
+      }
+      if (String(nextStart) > String(nextEnd)) {
+        return res.status(400).json({ error: 'start_date must be before or equal to end_date' });
+      }
+
+      if (is_active === true) {
+        await query(`UPDATE fiscal_years SET is_active = FALSE WHERE company_id = $1`, [req.company.id]);
+      }
+
+      const shouldClose = is_closed === true;
+      const shouldReopen = is_closed === false;
+      const nextActive = shouldClose ? false : (is_active ?? cur.rows[0].is_active);
+
+      const up = await query(
+        `UPDATE fiscal_years
+         SET year_code = $3,
+             name_ar = $4,
+             name_en = $5,
+             start_date = $6,
+             end_date = $7,
+             is_active = $8,
+             is_closed = $9,
+             closed_at = CASE
+               WHEN $9 = TRUE AND is_closed = FALSE THEN NOW()
+               WHEN $9 = FALSE THEN NULL
+               ELSE closed_at
+             END,
+             closed_by = CASE
+               WHEN $9 = TRUE AND is_closed = FALSE THEN $10
+               WHEN $9 = FALSE THEN NULL
+               ELSE closed_by
+             END,
+             updated_at = NOW()
+         WHERE id = $1 AND company_id = $2
+         RETURNING *`,
+        [
+          req.params.id,
+          req.company.id,
+          y,
+          name_ar !== undefined ? (name_ar ? String(name_ar).trim() : null) : cur.rows[0].name_ar,
+          name_en !== undefined ? (name_en ? String(name_en).trim() : null) : cur.rows[0].name_en,
+          nextStart,
+          nextEnd,
+          Boolean(nextActive),
+          shouldClose ? true : (shouldReopen ? false : Boolean(cur.rows[0].is_closed)),
+          req.user.id,
+        ]
+      );
+
+      const eventType = shouldClose
+        ? 'fiscal_year.closed'
+        : shouldReopen
+          ? 'fiscal_year.reopened'
+          : (is_active === true ? 'fiscal_year.activated' : 'fiscal_year.updated');
+      await writeAuditEvent({
+        companyId: req.company.id,
+        actorUserId: req.user.id,
+        eventType,
+        entityType: 'fiscal_year',
+        entityId: req.params.id,
+        details: {},
+      });
+      return res.json({ fiscal_year: up.rows[0] });
+    } catch (e) {
+      if (e.code === '23505') {
+        return res.status(409).json({ error: 'Fiscal year already exists for this company/year_code' });
+      }
+      if (String(e.message || '').includes('overlaps existing fiscal year')) {
+        return res.status(409).json({ error: 'Fiscal year date range overlaps an existing fiscal year' });
+      }
+      console.error(e);
+      return res.status(500).json({ error: 'Failed to update fiscal year' });
+    }
+  });
+});
+
 router.post('/:id/activate', async (req, res) => {
   return requireRole(['owner', 'admin'])(req, res, async () => {
     try {
