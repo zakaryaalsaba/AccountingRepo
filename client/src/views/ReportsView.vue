@@ -1455,10 +1455,10 @@ watch(accounts, () => {
         <input v-model="dedicatedFilters.document_to" type="text" class="ui-input" :placeholder="t('reports.documentTo')" />
         <select v-model="dedicatedFilters.voucher_type" class="ui-select">
           <option value="">{{ t('reports.voucherType') }}</option>
-          <option value="receipt">receipt</option>
-          <option value="payment">payment</option>
-          <option value="transfer">transfer</option>
-          <option value="adjustment">adjustment</option>
+          <option value="receipt">{{ t('vouchersView.families.receipt') }}</option>
+          <option value="payment">{{ t('vouchersView.families.payment') }}</option>
+          <option value="transfer">{{ t('vouchersView.families.transfer') }}</option>
+          <option value="adjustment">{{ t('vouchersView.families.adjustment') }}</option>
         </select>
         <select v-model="dedicatedFilters.account_id" class="ui-select">
           <option value="">{{ t('reports.account') }}</option>
@@ -1471,9 +1471,9 @@ watch(accounts, () => {
         <input v-model="dedicatedFilters.branch_id" class="ui-input" :placeholder="t('reports.branchId')" :disabled="!dedicatedFilters.include_branch" />
         <input v-model="dedicatedFilters.service_card_id" class="ui-input" :placeholder="t('reports.serviceCardId')" :disabled="!dedicatedFilters.include_service" />
         <select v-model="dedicatedFilters.variant" class="ui-select">
-          <option value="detailed">detailed</option>
-          <option value="summary">summary</option>
-          <option value="grouped">grouped</option>
+          <option value="detailed">{{ t('reports.variantDetailed') }}</option>
+          <option value="summary">{{ t('reports.variantSummary') }}</option>
+          <option value="grouped">{{ t('reports.variantGrouped') }}</option>
         </select>
       </div>
 
@@ -1518,11 +1518,11 @@ watch(accounts, () => {
         <input v-model="libraryFilters.as_of" type="date" class="ui-input" />
         <select v-model="libraryFilters.account_type" class="ui-select">
           <option value="">{{ t('reports.accountType') }}</option>
-          <option value="ASSET">ASSET</option>
-          <option value="LIABILITY">LIABILITY</option>
-          <option value="EQUITY">EQUITY</option>
-          <option value="REVENUE">REVENUE</option>
-          <option value="EXPENSE">EXPENSE</option>
+          <option value="ASSET">{{ t('accounts.types.ASSET') }}</option>
+          <option value="LIABILITY">{{ t('accounts.types.LIABILITY') }}</option>
+          <option value="EQUITY">{{ t('accounts.types.EQUITY') }}</option>
+          <option value="REVENUE">{{ t('accounts.types.REVENUE') }}</option>
+          <option value="EXPENSE">{{ t('accounts.types.EXPENSE') }}</option>
         </select>
         <input v-model="libraryFilters.level" type="number" min="1" max="6" class="ui-input" :placeholder="t('reports.level')" />
         <input v-model="libraryFilters.branch_id" class="ui-input" :placeholder="t('reports.branchId')" />
@@ -1533,9 +1533,9 @@ watch(accounts, () => {
           <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.code }} — {{ a.name }}</option>
         </select>
         <select v-model="libraryFilters.variant" class="ui-select">
-          <option value="detailed">detailed</option>
-          <option value="summary">summary</option>
-          <option value="grouped">grouped</option>
+          <option value="detailed">{{ t('reports.variantDetailed') }}</option>
+          <option value="summary">{{ t('reports.variantSummary') }}</option>
+          <option value="grouped">{{ t('reports.variantGrouped') }}</option>
         </select>
       </div>
       <button type="button" class="ui-btn-primary mt-3" :disabled="libraryLoading" @click="runLibraryReport">{{ t('reports.run') }}</button>
