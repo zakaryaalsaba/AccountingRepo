@@ -10,6 +10,7 @@ const loading = ref(false);
 const error = ref('');
 const statusFilter = ref('pending');
 const requests = ref([]);
+const decisionNotes = ref({});
 
 const filtered = computed(() => {
   if (!statusFilter.value) return requests.value;
@@ -34,7 +35,13 @@ async function load() {
 
 async function decide(id, decision) {
   try {
-    await api.post(`/api/audit/workflow/requests/${id}/decide`, { decision });
+    const note = String(decisionNotes.value[id] || '').trim();
+    if (!note) {
+      error.value = t('approvals.noteRequired');
+      return;
+    }
+    await api.post(`/api/audit/workflow/requests/${id}/decide`, { decision, note });
+    decisionNotes.value[id] = '';
     await load();
   } catch (e) {
     error.value = e.response?.data?.error || t('common.error');
@@ -65,7 +72,19 @@ watch(statusFilter, load);
           <p class="font-semibold">{{ r.doc_type }} · {{ r.entity_id }}</p>
           <p class="text-slate-600">{{ Number(r.amount || 0).toFixed(2) }} · {{ r.status }}</p>
           <p class="text-xs text-slate-500">{{ r.note || '-' }}</p>
+          <p class="mt-1 text-xs text-slate-500">
+            {{ t('approvals.requestedAt') }}: {{ r.requested_at ? String(r.requested_at).slice(0, 19).replace('T', ' ') : '-' }}
+          </p>
+          <p class="text-xs text-slate-500">
+            {{ t('approvals.decidedAt') }}: {{ r.decided_at ? String(r.decided_at).slice(0, 19).replace('T', ' ') : '-' }}
+          </p>
           <div v-if="r.status === 'pending'" class="mt-2 flex gap-2">
+            <input
+              v-model="decisionNotes[r.id]"
+              type="text"
+              class="ui-input max-w-sm"
+              :placeholder="t('approvals.notePlaceholder')"
+            />
             <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="decide(r.id, 'approved')">{{ t('approvals.approve') }}</button>
             <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="decide(r.id, 'rejected')">{{ t('approvals.reject') }}</button>
           </div>

@@ -106,6 +106,10 @@ function getTxRequest(txId) {
   return workflowRequests.value.find((r) => String(r.entity_id) === String(txId)) || null;
 }
 
+function isTxLocked(tx) {
+  return getTxRequest(tx.id)?.status === 'approved';
+}
+
 async function requestApproval(tx) {
   try {
     await api.post('/api/audit/workflow/requests', {
@@ -236,7 +240,7 @@ async function deleteTemplate(id) {
 }
 
 function editDraft(tx) {
-  if (!tx || tx.status !== 'draft') return;
+  if (!tx || tx.status !== 'draft' || isTxLocked(tx)) return;
   editingTransactionId.value = tx.id;
   entry.value.entry_date = tx.entry_date;
   entry.value.description = tx.description || '';
@@ -335,6 +339,11 @@ async function submit() {
 }
 
 async function remove(id) {
+  const tx = transactions.value.find((x) => String(x.id) === String(id));
+  if (tx && isTxLocked(tx)) {
+    error.value = t('approvals.lockedApprovedBanner');
+    return;
+  }
   if (!confirm(t('txWorkbench.confirmDelete'))) return;
   try {
     await api.delete(`/api/transactions/${id}`);
@@ -655,15 +664,28 @@ watch(
               <span v-if="getTxRequest(tx.id)" class="ui-badge-slate ms-1">
                 {{ t('approvals.lockState') }}: {{ getTxRequest(tx.id)?.status }}
               </span>
+              <p v-if="getTxRequest(tx.id)" class="mt-1 text-xs text-slate-500">
+                {{ t('approvals.requestedAt') }}: {{ String(getTxRequest(tx.id)?.requested_at || '-').slice(0, 19).replace('T', ' ') }}
+              </p>
+              <p v-if="getTxRequest(tx.id)" class="text-xs text-slate-500">
+                {{ t('approvals.decidedAt') }}: {{ String(getTxRequest(tx.id)?.decided_at || '-').slice(0, 19).replace('T', ' ') }}
+              </p>
+              <p v-if="getTxRequest(tx.id)?.note" class="text-xs text-slate-500">
+                {{ t('approvals.note') }}: {{ getTxRequest(tx.id)?.note }}
+              </p>
+              <p v-if="isTxLocked(tx)" class="mt-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-amber-100">
+                {{ t('approvals.lockedApprovedBanner') }}
+              </p>
             </td>
             <td>
-              <button type="button" class="ui-btn-danger !px-2 !py-1.5 text-sm" @click="remove(tx.id)">
+              <button type="button" class="ui-btn-danger !px-2 !py-1.5 text-sm" :disabled="isTxLocked(tx)" @click="remove(tx.id)">
                 {{ t('accounts.delete') }}
               </button>
               <button
                 v-if="tx.status === 'draft'"
                 type="button"
                 class="ui-btn-secondary !px-2 !py-1.5 text-sm ms-1"
+                :disabled="isTxLocked(tx)"
                 @click="editDraft(tx)"
               >
                 {{ t('txWorkbench.editDraft') }}

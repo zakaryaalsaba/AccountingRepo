@@ -77,6 +77,10 @@ function getVoucherRequest(voucherId) {
   return workflowRequests.value.find((r) => String(r.entity_id) === String(voucherId)) || null;
 }
 
+function isVoucherLocked(voucher) {
+  return getVoucherRequest(voucher.id)?.status === 'approved';
+}
+
 async function requestApproval(voucher) {
   try {
     await api.post('/api/audit/workflow/requests', {
@@ -243,13 +247,22 @@ watch(family, (v) => {
           <li v-for="v in filteredVouchers" :key="v.id" class="rounded-lg border border-slate-100 p-3 text-sm">
             <p class="font-semibold">{{ v.entry_date }} · {{ v.reference || '-' }} · {{ v.family }}</p>
             <p class="text-slate-600">{{ Number(v.amount).toFixed(2) }} · {{ v.status }}</p>
+            <p v-if="isVoucherLocked(v)" class="mt-1 rounded-md bg-amber-50 px-2 py-1 text-xs text-amber-700 ring-1 ring-amber-100">
+              {{ t('approvals.lockedApprovedBanner') }}
+            </p>
             <p v-if="getVoucherRequest(v.id)" class="mt-1 text-xs">
               <span class="ui-badge-slate">{{ t('approvals.lockState') }}: {{ getVoucherRequest(v.id)?.status }}</span>
             </p>
+            <p v-if="getVoucherRequest(v.id)" class="text-xs text-slate-500">
+              {{ t('approvals.requestedAt') }}: {{ String(getVoucherRequest(v.id)?.requested_at || '-').slice(0, 19).replace('T', ' ') }}
+            </p>
+            <p v-if="getVoucherRequest(v.id)" class="text-xs text-slate-500">
+              {{ t('approvals.decidedAt') }}: {{ String(getVoucherRequest(v.id)?.decided_at || '-').slice(0, 19).replace('T', ' ') }}
+            </p>
             <div class="mt-2 flex gap-2">
-              <button v-if="v.status === 'draft'" type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="postVoucher(v.id)">{{ t('vouchersView.postNow') }}</button>
+              <button v-if="v.status === 'draft'" type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" :disabled="isVoucherLocked(v)" @click="postVoucher(v.id)">{{ t('vouchersView.postNow') }}</button>
               <button type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="printVoucher(v.id)">{{ t('vouchersView.printPreview') }}</button>
-              <button v-if="!getVoucherRequest(v.id)" type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" @click="requestApproval(v)">
+              <button v-if="!getVoucherRequest(v.id)" type="button" class="ui-btn-secondary !px-2 !py-1 text-xs" :disabled="isVoucherLocked(v)" @click="requestApproval(v)">
                 {{ t('approvals.requestApproval') }}
               </button>
             </div>
