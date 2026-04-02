@@ -170,11 +170,11 @@ Important scope note:
 
 ---
 
-## Suggested Implementation Order
+## Suggested Implementation Order — **DONE** (sign-off: `docs/rollout-phase-signoff.md`)
 
-- [ ] Phase 1: Fiscal year + sequence engine + advanced voucher foundation.
-- [ ] Phase 2: Cheque lifecycle + bank settlement/reconciliation expansion.
-- [ ] Phase 3: Branch/service/project profitability dimensions and reports.
-- [ ] Phase 4: Service return invoices, statement depth, and print/export parity.
-- [ ] Phase 5: Workflow controls, audit hardening, and performance tuning.
+- [x] Phase 1: Fiscal year + sequence engine + advanced voucher foundation.
+- [x] Phase 2: Cheque lifecycle + bank settlement/reconciliation expansion.
+- [x] Phase 3: Branch/service/project profitability dimensions and reports.
+- [x] Phase 4: Service return invoices, statement depth, and print/export parity.
+- [x] Phase 5: Workflow controls, audit hardening, and performance tuning.
 

@@ -19,6 +19,18 @@ import {
 
 const router = Router();
 
+/** PostgreSQL undefined_table — common when prod DB has not run e-sign migrations. */
+function respondEsignQueryError(e, res, fallbackMessage) {
+  console.error(e);
+  if (e && typeof e === 'object' && e.code === '42P01') {
+    return res.status(503).json({
+      error:
+        'E-sign database objects are missing. Apply migrations 038_document_signing.sql and 039_esign_integration_hooks.sql (see docs/documents-module.md).',
+    });
+  }
+  return res.status(500).json({ error: fallbackMessage });
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isUuid(s) {
@@ -141,8 +153,7 @@ router.get('/', requirePermission('documents.read'), async (req, res) => {
     const r = await query(sql, params);
     return res.json({ documents: r.rows });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to list documents' });
+    return respondEsignQueryError(e, res, 'Failed to list documents');
   }
 });
 
@@ -207,8 +218,7 @@ router.post('/upload', requirePermission('documents.manage'), (req, res, next) =
       storage: { file_url: saved.file_url, storage_key: saved.storage_key, bytes_written: saved.bytes_written },
     });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to upload document' });
+    return respondEsignQueryError(e, res, 'Failed to upload document');
   }
 });
 
@@ -225,8 +235,7 @@ async function loadDocument(req, res, next) {
     req.esignDocument = r.rows[0];
     next();
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to load document' });
+    return respondEsignQueryError(e, res, 'Failed to load document');
   }
 }
 
@@ -274,8 +283,7 @@ router.get('/:id', requirePermission('documents.read'), loadDocument, requireRea
       audit_log: audits.rows,
     });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to load document detail' });
+    return respondEsignQueryError(e, res, 'Failed to load document detail');
   }
 });
 
@@ -387,8 +395,7 @@ router.patch('/:id', loadDocument, requireManageThisDocument, async (req, res) =
 
     return res.json({ document: fresh.rows[0], recipients: recs.rows.map(stripRecipientRow) });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Failed to update document' });
+    return respondEsignQueryError(e, res, 'Failed to update document');
   }
 });
 
@@ -501,7 +508,7 @@ router.post('/:id/send', loadDocument, requireManageThisDocument, async (req, re
     } catch (_) {
       /* ignore audit failure */
     }
-    return res.status(500).json({ error: 'Failed to send document' });
+    return respondEsignQueryError(e, res, 'Failed to send document');
   }
 });
 

@@ -83,6 +83,33 @@ Tokens are stored hashed in the database; the link contains the **plain** token 
 
 ---
 
+## Troubleshooting (e.g. DigitalOcean App Platform)
+
+### “Failed to list documents” (HTTP 500) or schema message (HTTP 503)
+
+The UI calls `GET /api/documents`. A **500** with `Failed to list documents` means the handler caught a database error. The most common cause on a new environment is **missing e-sign tables** (migrations `038` / `039` not applied to the **same** Postgres instance the app uses).
+
+**Fix:** Point `DATABASE_URL` at production and run:
+
+```bash
+bash scripts/run-document-signing-all.sh
+```
+
+Or apply all migrations in order (`scripts/run-prod-migrations.sh`). After deploy, the API may return **503** with an explicit message when PostgreSQL reports `undefined_table` (`42P01`).
+
+**Confirm:** In App Platform **Runtime Logs**, search for `esign_documents` or `42P01`. In `psql`, `\dt esign_*` should list `esign_documents`, `esign_recipients`, etc.
+
+### Module disabled (HTTP 403)
+
+- Server env: `DOCUMENTS_MODULE_ENABLED` must not be `0`.
+- If `company_feature_flags` exists, enable `module_key = 'documents'` for that company (Enterprise feature flags API or SQL).
+
+### API URL / CORS (wrong host, not “Failed to list documents”)
+
+The production build must use the correct API origin. Set **`VITE_API_URL`** at build time to your public API base (e.g. `https://accountingsaas-app-jxf9f.ondigitalocean.app` or your API subdomain) **if** the browser does not serve `/api` from the same origin. The client uses `base: '/accountingrepo-client/'` in Vite (`client/vite.config.js`); API requests use `VITE_API_URL` + `/api/...`.
+
+---
+
 ## Client (Vue)
 
 Routes and API helpers: `client/src/views/documents/`, `client/src/api/documentsApi.js`, `client/src/api/esignPublic.js`. Sidebar access uses `canAccessModule('documents')` and company feature flags.
