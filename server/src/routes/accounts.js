@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { pool, query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { companyContext } from '../middleware/companyContext.js';
-import { createAccountAuto } from '../utils/accountHierarchy.js';
+import {
+  createAccountAuto,
+  generateChildCode,
+  getChildCodeConstraints,
+} from '../utils/accountHierarchy.js';
 import { writeAuditEvent } from '../utils/auditLog.js';
 
 const router = Router();
@@ -45,10 +49,75 @@ router.get('/tree', async (req, res) => {
   }
 });
 
+router.get('/add-child-meta', async (req, res) => {
+  const parentId = req.query.parent_id;
+  if (!parentId) {
+    return res.status(400).json({ error: 'parent_id query parameter is required' });
+  }
+  const client = await pool.connect();
+  try {
+    const pr = await client.query(
+      `SELECT id, name, account_code, level, type::text
+       FROM accounts
+       WHERE id = $1 AND company_id = $2`,
+      [parentId, req.company.id]
+    );
+    if (!pr.rows.length) {
+      return res.status(404).json({ error: 'Parent account not found' });
+    }
+    const parent = pr.rows[0];
+    if (Number(parent.level) >= 5) {
+      return res.status(400).json({ error: 'Maximum account depth is 5 levels' });
+    }
+    const tx = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM transaction_lines tl
+         INNER JOIN transactions t ON t.id = tl.transaction_id
+         WHERE tl.account_id = $1 AND t.company_id = $2
+       ) AS e`,
+      [parentId, req.company.id]
+    );
+    if (tx.rows[0]?.e) {
+      return res.status(400).json({
+        error: 'Cannot add a child under an account that already has journal activity',
+        code: 'PARENT_HAS_ACTIVITY',
+      });
+    }
+    let constraints;
+    try {
+      constraints = getChildCodeConstraints(parent);
+    } catch (err) {
+      return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid parent code' });
+    }
+    const suggested = await generateChildCode(client, req.company.id, parent);
+    return res.json({
+      parent: {
+        id: parent.id,
+        name: parent.name,
+        account_code: parent.account_code,
+        type: parent.type,
+        level: parent.level,
+      },
+      suggested_account_code: suggested.account_code,
+      constraints: {
+        min_inclusive: constraints.min,
+        max_inclusive: constraints.max,
+        step: constraints.step,
+        next_level: constraints.nextLevel,
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to load add-child metadata' });
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { name, type, parent_id } = req.body || {};
+    const { name, type, parent_id, account_code } = req.body || {};
     if (!name || !type) {
       return res.status(400).json({ error: 'name and type are required' });
     }
@@ -57,13 +126,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Invalid account type' });
     }
 
+    let codeOverride = null;
     if (parent_id) {
       const parentRow = await client.query(
-        `SELECT id, level FROM accounts WHERE id = $1 AND company_id = $2`,
+        `SELECT id, level, type::text FROM accounts WHERE id = $1 AND company_id = $2`,
         [parent_id, req.company.id]
       );
       if (!parentRow.rows.length) {
         return res.status(400).json({ error: 'Invalid parent_id' });
+      }
+      if (parentRow.rows[0].type !== normalizedType) {
+        return res.status(400).json({ error: 'Child account type must match parent account type' });
       }
       if (Number(parentRow.rows[0].level) >= 5) {
         return res.status(400).json({ error: 'Maximum account depth is 5 levels' });
@@ -81,6 +154,11 @@ router.post('/', async (req, res) => {
           error: 'Cannot add a child under an account that already has journal activity',
         });
       }
+      if (account_code !== undefined && account_code !== null && String(account_code).trim() !== '') {
+        codeOverride = String(account_code).trim();
+      }
+    } else if (account_code !== undefined && String(account_code).trim() !== '') {
+      return res.status(400).json({ error: 'account_code can only be set when parent_id is provided' });
     }
 
     const account = await createAccountAuto(client, {
@@ -88,9 +166,13 @@ router.post('/', async (req, res) => {
       name,
       type: normalizedType,
       parentId: parent_id || null,
+      accountCodeOverride: codeOverride,
     });
     return res.status(201).json({ account });
   } catch (e) {
+    if (e.status === 400 || e.status === 409) {
+      return res.status(e.status).json({ error: e.message });
+    }
     if (e.message === 'Invalid parent_id' || e.message === 'Maximum account depth is 5 levels') {
       return res.status(400).json({ error: e.message });
     }

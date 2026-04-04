@@ -232,7 +232,10 @@
     "collapseAll": "طي الكل",
     "empty": "لا توجد حسابات بعد.",
     "addNewChild": "إضافة حساب فرعي",
-    "addChildTitle": "إضافة حساب فرعي",
+    "addChildModalTitle": "إضافة حساب فرعي",
+    "addChildUnder": "الحساب الأب",
+    "childAccountCode": "رمز الحساب",
+    "codeRangeHint": "الرموز المسموحة: من {min_inclusive} إلى {max_inclusive} بخطوات {step}",
     "types": {
       "ASSET": "أصول",
       "LIABILITY": "التزامات",

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch, computed, nextTick } from 'vue';
+import { ref, onMounted, watch, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
@@ -16,9 +16,16 @@ const selectedAccountIds = ref([]);
 const editingId = ref('');
 const moveTargetParentId = ref('');
 const movingAccountId = ref('');
-const formPanelRef = ref(null);
 
 const form = ref({ name: '', type: 'ASSET', parent_id: '', is_active: true });
+
+const addChildModalOpen = ref(false);
+const addChildLoadingMeta = ref(false);
+const addChildSubmitting = ref(false);
+const addChildParent = ref(null);
+const addChildForm = ref({ name: '', account_code: '' });
+const addChildConstraints = ref(null);
+const addChildError = ref('');
 const types = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'];
 
 function expansionStorageKey() {
@@ -118,18 +125,79 @@ function canAddChild(account) {
   return !hasTx && lvl < 5;
 }
 
-function startAddChild(parent) {
+function closeAddChildModal() {
+  addChildModalOpen.value = false;
+  addChildParent.value = null;
+  addChildConstraints.value = null;
+  addChildForm.value = { name: '', account_code: '' };
+  addChildError.value = '';
+  addChildLoadingMeta.value = false;
+  addChildSubmitting.value = false;
+}
+
+async function startAddChild(parent) {
   if (!canAddChild(parent)) return;
-  editingId.value = '';
-  form.value = {
-    name: '',
-    type: parent.type,
-    parent_id: parent.id,
-    is_active: true,
-  };
-  nextTick(() => {
-    formPanelRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-  });
+  addChildError.value = '';
+  addChildParent.value = parent;
+  addChildModalOpen.value = true;
+  addChildLoadingMeta.value = true;
+  addChildConstraints.value = null;
+  addChildForm.value = { name: '', account_code: '' };
+  try {
+    const { data } = await api.get('/api/accounts/add-child-meta', {
+      params: { parent_id: parent.id },
+    });
+    addChildConstraints.value = data.constraints;
+    addChildForm.value = {
+      name: '',
+      account_code: String(data.suggested_account_code ?? ''),
+    };
+  } catch (e) {
+    const msg = e.response?.data?.error || t('common.error');
+    addChildError.value = msg;
+    error.value = msg;
+    closeAddChildModal();
+  } finally {
+    addChildLoadingMeta.value = false;
+  }
+}
+
+function validateAddChildCodeInput() {
+  const c = addChildConstraints.value;
+  if (!c) return false;
+  const raw = String(addChildForm.value.account_code ?? '').trim();
+  if (!/^\d+$/.test(raw)) return false;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return false;
+  if (n < c.min_inclusive || n > c.max_inclusive) return false;
+  if ((n - c.min_inclusive) % c.step !== 0) return false;
+  return true;
+}
+
+const canSubmitAddChild = computed(() => {
+  if (!addChildParent.value || !addChildConstraints.value || addChildLoadingMeta.value) return false;
+  const nameOk = String(addChildForm.value.name ?? '').trim().length > 0;
+  return nameOk && validateAddChildCodeInput();
+});
+
+async function submitAddChild() {
+  if (!canSubmitAddChild.value || !addChildParent.value) return;
+  addChildSubmitting.value = true;
+  addChildError.value = '';
+  try {
+    await api.post('/api/accounts', {
+      name: String(addChildForm.value.name).trim(),
+      type: addChildParent.value.type,
+      parent_id: addChildParent.value.id,
+      account_code: String(addChildForm.value.account_code).trim(),
+    });
+    closeAddChildModal();
+    await load();
+  } catch (e) {
+    addChildError.value = e.response?.data?.error || t('common.error');
+  } finally {
+    addChildSubmitting.value = false;
+  }
 }
 
 async function add() {
@@ -252,10 +320,8 @@ const visibleGroupedRows = computed(() =>
       <p class="ui-page-desc">{{ t('accounts.add') }}</p>
     </div>
 
-    <div ref="formPanelRef" class="ui-card ui-card-pad">
-      <h2 class="ui-card-title mb-5">
-        {{ editingId ? t('accounts.edit') : form.parent_id ? t('accounts.addChildTitle') : t('accounts.add') }}
-      </h2>
+    <div class="ui-card ui-card-pad">
+      <h2 class="ui-card-title mb-5">{{ editingId ? t('accounts.edit') : t('accounts.add') }}</h2>
       <form class="grid gap-3 sm:grid-cols-4" @submit.prevent="add">
         <input
           v-model="form.name"
@@ -263,12 +329,12 @@ const visibleGroupedRows = computed(() =>
           :placeholder="t('accounts.name')"
           class="ui-input sm:col-span-2"
         />
-        <select v-model="form.type" class="ui-select" :disabled="Boolean(form.parent_id && !editingId)">
+        <select v-model="form.type" class="ui-select">
           <option v-for="tp in types" :key="tp" :value="tp">
             {{ t(`accounts.types.${tp}`) }}
           </option>
         </select>
-        <select v-model="form.parent_id" class="ui-select" :disabled="Boolean(form.parent_id && !editingId)">
+        <select v-model="form.parent_id" class="ui-select">
           <option value="">{{ t('accounts.rootAccount') }}</option>
           <option v-for="p in parentOptions" :key="p.id" :value="p.id">
             {{ p.label }}
@@ -422,6 +488,59 @@ const visibleGroupedRows = computed(() =>
           <button type="button" class="ui-btn-secondary" @click="movingAccountId = ''">{{ t('common.cancel') }}</button>
           <button type="button" class="ui-btn-primary" @click="moveAccount(movingAccountId)">{{ t('accounts.move') }}</button>
         </div>
+      </div>
+    </div>
+
+    <div
+      v-if="addChildModalOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      :aria-labelledby="'add-child-title'"
+      @click.self="closeAddChildModal"
+    >
+      <div class="w-full max-w-md rounded-xl bg-white p-4 shadow-xl" @click.stop>
+        <h3 id="add-child-title" class="mb-1 text-lg font-bold text-slate-900">{{ t('accounts.addChildModalTitle') }}</h3>
+        <p v-if="addChildParent" class="mb-4 text-sm text-slate-600">
+          {{ t('accounts.addChildUnder') }}:
+          <span class="font-mono font-semibold text-brand-800" dir="ltr">{{ addChildParent.account_code }}</span>
+          — {{ addChildParent.name }}
+        </p>
+        <div v-if="addChildLoadingMeta" class="py-8 text-center text-slate-500">{{ t('common.loading') }}</div>
+        <template v-else>
+          <label class="mb-1 block text-sm font-medium text-slate-700">{{ t('accounts.childAccountCode') }}</label>
+          <input
+            v-model="addChildForm.account_code"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            class="ui-input mb-1 font-mono"
+            dir="ltr"
+            :disabled="!addChildConstraints"
+            :aria-invalid="addChildForm.account_code && !validateAddChildCodeInput()"
+          />
+          <p v-if="addChildConstraints" class="mb-3 text-xs text-slate-500" dir="ltr">
+            {{ t('accounts.codeRangeHint', addChildConstraints) }}
+          </p>
+          <label class="mb-1 block text-sm font-medium text-slate-700">{{ t('accounts.name') }}</label>
+          <input v-model="addChildForm.name" type="text" class="ui-input mb-3" required />
+          <p v-if="addChildError" class="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800 ring-1 ring-rose-100">
+            {{ addChildError }}
+          </p>
+          <div class="flex flex-wrap justify-end gap-2">
+            <button type="button" class="ui-btn-secondary" :disabled="addChildSubmitting" @click="closeAddChildModal">
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              type="button"
+              class="ui-btn-primary"
+              :disabled="!canSubmitAddChild || addChildSubmitting"
+              @click="submitAddChild"
+            >
+              {{ t('accounts.save') }}
+            </button>
+          </div>
+        </template>
       </div>
     </div>
   </div>

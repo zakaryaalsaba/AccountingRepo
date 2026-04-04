@@ -232,7 +232,10 @@
     "collapseAll": "Collapse all",
     "empty": "No accounts yet.",
     "addNewChild": "Add new child",
-    "addChildTitle": "Add child account",
+    "addChildModalTitle": "Add child account",
+    "addChildUnder": "Parent",
+    "childAccountCode": "Account code",
+    "codeRangeHint": "Allowed codes: {min_inclusive} to {max_inclusive}, in steps of {step}",
     "types": {
       "ASSET": "Assets",
       "LIABILITY": "Liabilities",

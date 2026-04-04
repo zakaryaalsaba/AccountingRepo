@@ -37,7 +37,90 @@ async function generateRootCode(client, companyId, type) {
   return { account_code: String(next), level: 1 };
 }
 
-async function generateChildCode(client, companyId, parent) {
+/** @param {{ level: number, account_code: string }} parent */
+export function getChildCodeConstraints(parent) {
+  const pl = Number(parent.level);
+  const pc = toIntCode(parent.account_code);
+  if (pc == null) {
+    throw new Error('Parent account code is invalid');
+  }
+  const nextLevel = pl + 1;
+  if (nextLevel > 5) {
+    throw new Error('Maximum account depth is 5 levels');
+  }
+  let step;
+  let min;
+  let max;
+  if (nextLevel === 2) {
+    step = 100;
+    min = pc + 100;
+    max = pc + 900;
+  } else if (nextLevel === 3) {
+    step = 10;
+    min = pc + 10;
+    max = pc + 90;
+  } else if (nextLevel === 4) {
+    step = 1;
+    min = pc + 1;
+    max = pc + 9;
+  } else {
+    step = 1;
+    min = pc * 10 + 1;
+    max = pc * 10 + 9;
+  }
+  return { min, max, step, nextLevel };
+}
+
+/**
+ * @param {{ level: number, account_code: string }} parent
+ * @param {number} codeInt
+ */
+export function validateChildAccountCodeNumeric(parent, codeInt) {
+  let c;
+  try {
+    c = getChildCodeConstraints(parent);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Invalid parent' };
+  }
+  if (!Number.isInteger(codeInt) || codeInt < c.min || codeInt > c.max) {
+    return {
+      ok: false,
+      error: `Account code must be between ${c.min} and ${c.max} (child level ${c.nextLevel})`,
+    };
+  }
+  if ((codeInt - c.min) % c.step !== 0) {
+    return {
+      ok: false,
+      error: `Account code must increase in steps of ${c.step} within the allowed range`,
+    };
+  }
+  return { ok: true, nextLevel: c.nextLevel };
+}
+
+export async function assertUniqueChildAccountCode(client, companyId, parent, accountCodeStr) {
+  const trim = String(accountCodeStr ?? '').trim();
+  if (!/^\d+$/.test(trim)) {
+    const e = new Error('Account code must be numeric');
+    e.status = 400;
+    throw e;
+  }
+  const codeInt = parseInt(trim, 10);
+  const v = validateChildAccountCodeNumeric(parent, codeInt);
+  if (!v.ok) {
+    const e = new Error(v.error);
+    e.status = 400;
+    throw e;
+  }
+  const asStr = String(codeInt);
+  if (await codeExists(client, companyId, asStr)) {
+    const e = new Error('Account code already exists for this company');
+    e.status = 409;
+    throw e;
+  }
+  return { account_code: asStr, level: v.nextLevel };
+}
+
+export async function generateChildCode(client, companyId, parent) {
   const nextLevel = Number(parent.level) + 1;
   if (nextLevel > 5) {
     throw new Error('Maximum account depth is 5 levels');
@@ -82,7 +165,7 @@ async function generateChildCode(client, companyId, parent) {
   return { account_code: String(next), level: nextLevel };
 }
 
-export async function createAccountAuto(client, { companyId, name, type, parentId = null }) {
+export async function createAccountAuto(client, { companyId, name, type, parentId = null, accountCodeOverride = null }) {
   let parent = null;
   if (parentId) {
     const p = await client.query(
@@ -95,9 +178,22 @@ export async function createAccountAuto(client, { companyId, name, type, parentI
     parent = p.rows[0];
   }
 
-  const generated = parent
-    ? await generateChildCode(client, companyId, parent)
-    : await generateRootCode(client, companyId, type);
+  const trimOverride =
+    accountCodeOverride != null && String(accountCodeOverride).trim() !== ''
+      ? String(accountCodeOverride).trim()
+      : null;
+
+  let generated;
+  if (trimOverride) {
+    if (!parent) {
+      throw new Error('account_code override requires parent_id');
+    }
+    generated = await assertUniqueChildAccountCode(client, companyId, parent, trimOverride);
+  } else if (parent) {
+    generated = await generateChildCode(client, companyId, parent);
+  } else {
+    generated = await generateRootCode(client, companyId, type);
+  }
 
   const ins = await client.query(
     `INSERT INTO accounts (company_id, code, account_code, level, name, type, parent_id)
