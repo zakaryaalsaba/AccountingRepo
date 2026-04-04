@@ -1,10 +1,10 @@
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue';
+import { ref, onMounted, watch, computed, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useCompanyStore } from '@/stores/company';
 import { api } from '@/api/client';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const company = useCompanyStore();
 
 const accounts = ref([]);
@@ -16,6 +16,7 @@ const selectedAccountIds = ref([]);
 const editingId = ref('');
 const moveTargetParentId = ref('');
 const movingAccountId = ref('');
+const formPanelRef = ref(null);
 
 const form = ref({ name: '', type: 'ASSET', parent_id: '', is_active: true });
 const types = ['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE'];
@@ -107,6 +108,28 @@ function startEdit(account) {
 function cancelEdit() {
   editingId.value = '';
   form.value = { name: '', type: 'ASSET', parent_id: '', is_active: true };
+}
+
+/** Child rows are only allowed under accounts with no journal lines and below max depth (5). */
+function canAddChild(account) {
+  if (!account) return false;
+  const hasTx = account.has_transactions === true || account.has_transactions === 't';
+  const lvl = Number(account.level);
+  return !hasTx && lvl < 5;
+}
+
+function startAddChild(parent) {
+  if (!canAddChild(parent)) return;
+  editingId.value = '';
+  form.value = {
+    name: '',
+    type: parent.type,
+    parent_id: parent.id,
+    is_active: true,
+  };
+  nextTick(() => {
+    formPanelRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 async function add() {
@@ -229,8 +252,10 @@ const visibleGroupedRows = computed(() =>
       <p class="ui-page-desc">{{ t('accounts.add') }}</p>
     </div>
 
-    <div class="ui-card ui-card-pad">
-      <h2 class="ui-card-title mb-5">{{ editingId ? t('accounts.edit') : t('accounts.add') }}</h2>
+    <div ref="formPanelRef" class="ui-card ui-card-pad">
+      <h2 class="ui-card-title mb-5">
+        {{ editingId ? t('accounts.edit') : form.parent_id ? t('accounts.addChildTitle') : t('accounts.add') }}
+      </h2>
       <form class="grid gap-3 sm:grid-cols-4" @submit.prevent="add">
         <input
           v-model="form.name"
@@ -238,12 +263,12 @@ const visibleGroupedRows = computed(() =>
           :placeholder="t('accounts.name')"
           class="ui-input sm:col-span-2"
         />
-        <select v-model="form.type" class="ui-select">
+        <select v-model="form.type" class="ui-select" :disabled="Boolean(form.parent_id && !editingId)">
           <option v-for="tp in types" :key="tp" :value="tp">
             {{ t(`accounts.types.${tp}`) }}
           </option>
         </select>
-        <select v-model="form.parent_id" class="ui-select">
+        <select v-model="form.parent_id" class="ui-select" :disabled="Boolean(form.parent_id && !editingId)">
           <option value="">{{ t('accounts.rootAccount') }}</option>
           <option v-for="p in parentOptions" :key="p.id" :value="p.id">
             {{ p.label }}
@@ -309,7 +334,7 @@ const visibleGroupedRows = computed(() =>
                   <button
                     type="button"
                     class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    :title="isExpanded(group.root.id) ? (locale === 'ar' ? 'طي' : 'Collapse') : (locale === 'ar' ? 'توسيع' : 'Expand')"
+                    :title="isExpanded(group.root.id) ? (String(locale) === 'ar' ? 'طي' : 'Collapse') : (String(locale) === 'ar' ? 'توسيع' : 'Expand')"
                     @click="toggleExpanded(group.root.id)"
                   >
                     <span v-if="isExpanded(group.root.id)">−</span>
@@ -323,14 +348,24 @@ const visibleGroupedRows = computed(() =>
               </td>
               <td class="text-slate-600">{{ group.root.level }}</td>
               <td>
-                <details class="relative">
-                  <summary class="ui-btn-secondary !px-2 !py-1.5 text-sm cursor-pointer">{{ t('accounts.actions') }}</summary>
-                  <div class="absolute end-0 z-20 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="startEdit(group.root)">{{ t('accounts.edit') }}</button>
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="openMoveDialog(group.root.id, group.root.parent_id)">{{ t('accounts.move') }}</button>
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm text-rose-600 hover:bg-rose-50" @click="remove(group.root.id)">{{ t('accounts.delete') }}</button>
-                  </div>
-                </details>
+                <div class="flex flex-wrap items-center justify-end gap-1">
+                  <button
+                    v-if="canAddChild(group.root)"
+                    type="button"
+                    class="ui-btn-primary !px-2 !py-1 text-xs whitespace-nowrap"
+                    @click="startAddChild(group.root)"
+                  >
+                    {{ t('accounts.addNewChild') }}
+                  </button>
+                  <details class="relative">
+                    <summary class="ui-btn-secondary !px-2 !py-1.5 text-sm cursor-pointer">{{ t('common.actions') }}</summary>
+                    <div class="absolute end-0 z-20 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="startEdit(group.root)">{{ t('accounts.edit') }}</button>
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="openMoveDialog(group.root.id, group.root.parent_id)">{{ t('accounts.move') }}</button>
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm text-rose-600 hover:bg-rose-50" @click="remove(group.root.id)">{{ t('accounts.delete') }}</button>
+                    </div>
+                  </details>
+                </div>
               </td>
             </tr>
             <tr v-for="a in (isExpanded(group.root.id) ? group.children : [])" :key="a.id">
@@ -346,14 +381,24 @@ const visibleGroupedRows = computed(() =>
               </td>
               <td class="text-slate-500">{{ a.level }}</td>
               <td>
-                <details class="relative">
-                  <summary class="ui-btn-secondary !px-2 !py-1.5 text-sm cursor-pointer">{{ t('accounts.actions') }}</summary>
-                  <div class="absolute end-0 z-20 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="startEdit(a)">{{ t('accounts.edit') }}</button>
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="openMoveDialog(a.id, a.parent_id)">{{ t('accounts.move') }}</button>
-                    <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm text-rose-600 hover:bg-rose-50" @click="remove(a.id)">{{ t('accounts.delete') }}</button>
-                  </div>
-                </details>
+                <div class="flex flex-wrap items-center justify-end gap-1">
+                  <button
+                    v-if="canAddChild(a)"
+                    type="button"
+                    class="ui-btn-primary !px-2 !py-1 text-xs whitespace-nowrap"
+                    @click="startAddChild(a)"
+                  >
+                    {{ t('accounts.addNewChild') }}
+                  </button>
+                  <details class="relative">
+                    <summary class="ui-btn-secondary !px-2 !py-1.5 text-sm cursor-pointer">{{ t('common.actions') }}</summary>
+                    <div class="absolute end-0 z-20 mt-1 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="startEdit(a)">{{ t('accounts.edit') }}</button>
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm hover:bg-slate-50" @click="openMoveDialog(a.id, a.parent_id)">{{ t('accounts.move') }}</button>
+                      <button type="button" class="w-full rounded-md px-2 py-1 text-start text-sm text-rose-600 hover:bg-rose-50" @click="remove(a.id)">{{ t('accounts.delete') }}</button>
+                    </div>
+                  </details>
+                </div>
               </td>
             </tr>
           </template>

@@ -231,6 +231,8 @@
     "expandAll": "Expand all",
     "collapseAll": "Collapse all",
     "empty": "No accounts yet.",
+    "addNewChild": "Add new child",
+    "addChildTitle": "Add child account",
     "types": {
       "ASSET": "Assets",
       "LIABILITY": "Liabilities",

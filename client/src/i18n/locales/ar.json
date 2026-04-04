@@ -231,6 +231,8 @@
     "expandAll": "توسيع الكل",
     "collapseAll": "طي الكل",
     "empty": "لا توجد حسابات بعد.",
+    "addNewChild": "إضافة حساب فرعي",
+    "addChildTitle": "إضافة حساب فرعي",
     "types": {
       "ASSET": "أصول",
       "LIABILITY": "التزامات",

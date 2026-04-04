@@ -10,15 +10,17 @@ router.use(authRequired, companyContext);
 
 const TYPES = new Set(['ASSET', 'LIABILITY', 'EQUITY', 'REVENUE', 'EXPENSE']);
 
+const ACCOUNT_LIST_SELECT = `SELECT id, company_id, account_code, level, name, type::text, parent_id, is_active, created_at,
+       EXISTS (
+         SELECT 1 FROM transaction_lines tl
+         INNER JOIN transactions t ON t.id = tl.transaction_id
+         WHERE tl.account_id = accounts.id AND t.company_id = accounts.company_id
+       ) AS has_transactions
+       FROM accounts`;
+
 router.get('/', async (req, res) => {
   try {
-    const r = await query(
-      `SELECT id, company_id, account_code, level, name, type::text, parent_id, is_active, created_at
-       FROM accounts
-       WHERE company_id = $1
-       ORDER BY account_code`,
-      [req.company.id]
-    );
+    const r = await query(`${ACCOUNT_LIST_SELECT} WHERE company_id = $1 ORDER BY account_code`, [req.company.id]);
     return res.json({ accounts: r.rows });
   } catch (e) {
     console.error(e);
@@ -28,13 +30,7 @@ router.get('/', async (req, res) => {
 
 router.get('/tree', async (req, res) => {
   try {
-    const r = await query(
-      `SELECT id, company_id, account_code, level, name, type::text, parent_id, is_active, created_at
-       FROM accounts
-       WHERE company_id = $1
-       ORDER BY account_code`,
-      [req.company.id]
-    );
+    const r = await query(`${ACCOUNT_LIST_SELECT} WHERE company_id = $1 ORDER BY account_code`, [req.company.id]);
     const rows = r.rows;
     const byId = new Map(rows.map((a) => [a.id, { ...a, children: [] }]));
     const roots = [];
@@ -59,6 +55,32 @@ router.post('/', async (req, res) => {
     const normalizedType = String(type).toUpperCase();
     if (!TYPES.has(normalizedType)) {
       return res.status(400).json({ error: 'Invalid account type' });
+    }
+
+    if (parent_id) {
+      const parentRow = await client.query(
+        `SELECT id, level FROM accounts WHERE id = $1 AND company_id = $2`,
+        [parent_id, req.company.id]
+      );
+      if (!parentRow.rows.length) {
+        return res.status(400).json({ error: 'Invalid parent_id' });
+      }
+      if (Number(parentRow.rows[0].level) >= 5) {
+        return res.status(400).json({ error: 'Maximum account depth is 5 levels' });
+      }
+      const tx = await client.query(
+        `SELECT EXISTS (
+           SELECT 1 FROM transaction_lines tl
+           INNER JOIN transactions t ON t.id = tl.transaction_id
+           WHERE tl.account_id = $1 AND t.company_id = $2
+         ) AS e`,
+        [parent_id, req.company.id]
+      );
+      if (tx.rows[0]?.e) {
+        return res.status(400).json({
+          error: 'Cannot add a child under an account that already has journal activity',
+        });
+      }
     }
 
     const account = await createAccountAuto(client, {
